@@ -1,0 +1,14 @@
+[gd_resource type="Resource" script_class="ResourceNodeData" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://resources/resource_node_data.gd" id="1_nt"]
+
+[resource]
+script = ExtResource("1_nt")
+node_type_id = &"forage"
+display_name = "Forage"
+resource_id = &"food"
+is_rare = false
+capacity = 220
+base_gather = 3
+pin_color = Color(0.35, 0.65, 0.22, 1)
+reveal_era = 0

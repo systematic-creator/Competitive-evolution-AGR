@@ -1,0 +1,15 @@
+[gd_resource type="Resource" script_class="RegionData" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://resources/region_data.gd" id="1_reg"]
+
+[resource]
+script = ExtResource("1_reg")
+region_id = &"pale_steppe"
+display_name = "Pale Steppe"
+is_accessible = false
+owner_faction_id = &"humans"
+latitude_deg = 48.0
+longitude_deg = 70.0
+grid_size = Vector2i(16, 16)
+cell_size = 0.0625
+rare_resources = Array[StringName]([&"coal"])

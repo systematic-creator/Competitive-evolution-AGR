@@ -1,0 +1,109 @@
+[gd_resource type="Resource" script_class="RegionNodeLayout" load_steps=27 format=3]
+
+[ext_resource type="Script" path="res://resources/region_node_layout.gd" id="1_layout"]
+[ext_resource type="Script" path="res://resources/resource_node_placement.gd" id="2_place"]
+[ext_resource type="Resource" path="res://data/nodes/types/timber.tres" id="type_timber"]
+[ext_resource type="Resource" path="res://data/nodes/types/forage.tres" id="type_forage"]
+[ext_resource type="Resource" path="res://data/nodes/types/stone_deposit.tres" id="type_stone_deposit"]
+[ext_resource type="Resource" path="res://data/nodes/types/iron_vein.tres" id="type_iron_vein"]
+[ext_resource type="Resource" path="res://data/nodes/types/coal_seam.tres" id="type_coal_seam"]
+
+[sub_resource type="Resource" id="place_1"]
+script = ExtResource("2_place")
+node_type = ExtResource("type_timber")
+cell = Vector2i(3, 3)
+
+[sub_resource type="Resource" id="place_2"]
+script = ExtResource("2_place")
+node_type = ExtResource("type_timber")
+cell = Vector2i(4, 12)
+
+[sub_resource type="Resource" id="place_3"]
+script = ExtResource("2_place")
+node_type = ExtResource("type_timber")
+cell = Vector2i(11, 3)
+
+[sub_resource type="Resource" id="place_4"]
+script = ExtResource("2_place")
+node_type = ExtResource("type_timber")
+cell = Vector2i(12, 13)
+
+[sub_resource type="Resource" id="place_5"]
+script = ExtResource("2_place")
+node_type = ExtResource("type_timber")
+cell = Vector2i(6, 5)
+
+[sub_resource type="Resource" id="place_6"]
+script = ExtResource("2_place")
+node_type = ExtResource("type_timber")
+cell = Vector2i(9, 11)
+
+[sub_resource type="Resource" id="place_7"]
+script = ExtResource("2_place")
+node_type = ExtResource("type_forage")
+cell = Vector2i(3, 6)
+
+[sub_resource type="Resource" id="place_8"]
+script = ExtResource("2_place")
+node_type = ExtResource("type_forage")
+cell = Vector2i(6, 13)
+
+[sub_resource type="Resource" id="place_9"]
+script = ExtResource("2_place")
+node_type = ExtResource("type_forage")
+cell = Vector2i(12, 6)
+
+[sub_resource type="Resource" id="place_10"]
+script = ExtResource("2_place")
+node_type = ExtResource("type_forage")
+cell = Vector2i(9, 3)
+
+[sub_resource type="Resource" id="place_11"]
+script = ExtResource("2_place")
+node_type = ExtResource("type_forage")
+cell = Vector2i(4, 9)
+
+[sub_resource type="Resource" id="place_12"]
+script = ExtResource("2_place")
+node_type = ExtResource("type_stone_deposit")
+cell = Vector2i(5, 2)
+
+[sub_resource type="Resource" id="place_13"]
+script = ExtResource("2_place")
+node_type = ExtResource("type_stone_deposit")
+cell = Vector2i(2, 11)
+
+[sub_resource type="Resource" id="place_14"]
+script = ExtResource("2_place")
+node_type = ExtResource("type_stone_deposit")
+cell = Vector2i(13, 4)
+
+[sub_resource type="Resource" id="place_15"]
+script = ExtResource("2_place")
+node_type = ExtResource("type_stone_deposit")
+cell = Vector2i(11, 11)
+
+[sub_resource type="Resource" id="place_16"]
+script = ExtResource("2_place")
+node_type = ExtResource("type_stone_deposit")
+cell = Vector2i(7, 13)
+
+[sub_resource type="Resource" id="place_17"]
+script = ExtResource("2_place")
+node_type = ExtResource("type_iron_vein")
+cell = Vector2i(8, 7)
+
+[sub_resource type="Resource" id="place_18"]
+script = ExtResource("2_place")
+node_type = ExtResource("type_coal_seam")
+cell = Vector2i(8, 10)
+
+[sub_resource type="Resource" id="place_19"]
+script = ExtResource("2_place")
+node_type = ExtResource("type_iron_vein")
+cell = Vector2i(11, 8)
+
+[resource]
+script = ExtResource("1_layout")
+region_id = &"verdant_basin"
+placements = Array[ResourceNodePlacement]([SubResource("place_1"), SubResource("place_2"), SubResource("place_3"), SubResource("place_4"), SubResource("place_5"), SubResource("place_6"), SubResource("place_7"), SubResource("place_8"), SubResource("place_9"), SubResource("place_10"), SubResource("place_11"), SubResource("place_12"), SubResource("place_13"), SubResource("place_14"), SubResource("place_15"), SubResource("place_16"), SubResource("place_17"), SubResource("place_18"), SubResource("place_19")])

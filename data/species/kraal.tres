@@ -1,0 +1,44 @@
+[gd_resource type="Resource" script_class="SpeciesData" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://resources/species_data.gd" id="1_sp"]
+
+[resource]
+script = ExtResource("1_sp")
+species_id = &"kraal"
+display_name = "Kraal"
+description = "An insect hive. Units are cheap and numerous, swarms expand quickly, and era shifts come slowly."
+faction_color = Color(0.82, 0.42, 0.16, 1)
+era_display_names = PackedStringArray()
+traits = Array[StringName]([&"hive",
+&"swarm"])
+starting_era_index = 0
+starting_resources = {
+&"food": 85,
+&"wood": 70,
+&"stone": 40
+}
+starting_unit_count = 6
+gather_rate_multiplier = 1.0
+build_speed_multiplier = 1.25
+research_speed_multiplier = 0.65
+unit_health_multiplier = 0.75
+unit_speed_multiplier = 1.15
+unit_cost_multiplier = 0.55
+era_cost_multiplier = 1.35
+train_speed_multiplier = 1.35
+territory_regen_per_tick = 0
+defense_hold_bonus_per_tick = 0.0
+max_hold_defense_bonus = 0.0
+industry_production_bonus = 0.0
+units_are_constructed = false
+ai_expand_weight = 1.75
+ai_military_weight = 1.55
+ai_economy_weight = 1.0
+ai_era_weight = 0.4
+ai_defense_weight = 0.55
+ai_water_preference = 0.0
+harvest_speed_multiplier = 1.45
+node_depletion_multiplier = 1.75
+can_build_extractors = false
+extractor_rare_yield_bonus = 0.0
+ai_rare_weight = 1.25
