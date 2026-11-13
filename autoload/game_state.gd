@@ -1,26 +1,38 @@
 extends Node
 ## Global simulation state (autoload: `GameState`).
 ##
-## Owns the current zoom tier, the registered factions, and the global tick
-## clock. Pure data + timing only: never touches meshes or AR transforms.
+## Owns the current zoom tier, the registered factions, the global tick
+## clock, and the authoritative `SimWorld`. Pure data + timing only: never
+## touches meshes or AR transforms.
 
 enum ZoomTier { ORBIT, REGION, RTS, THIRD_PERSON }
 
 ## Seconds between simulation ticks.
 const DEFAULT_TICK_INTERVAL: float = 1.0
 
-var current_zoom_tier: ZoomTier = ZoomTier.ORBIT:
-	set = set_zoom_tier
+var _current_zoom_tier: ZoomTier = ZoomTier.ORBIT
+var current_zoom_tier: ZoomTier:
+	get:
+		return _current_zoom_tier
+	set(value):
+		set_zoom_tier(value)
 
 ## Region currently locked on from the orbit globe (empty when none).
 var selected_region_id: StringName = &""
 
-## faction_id (StringName) -> SpeciesData
+## faction_id (StringName) -> SpeciesData (kept for smoke-test compatibility)
 var factions: Dictionary = {}
 
 var tick_interval: float = DEFAULT_TICK_INTERVAL
 var tick_count: int = 0
 var is_simulation_running: bool = false
+var ai_enabled: bool = true
+
+## Authoritative concept simulation. Null until `bootstrap_concept_world()`.
+var world: SimWorld
+
+## Player command facade, rebuilt alongside `world`.
+var commands: CommandService
 
 var _tick_accumulator: float = 0.0
 
@@ -36,16 +48,15 @@ func _process(delta: float) -> void:
 	_tick_accumulator += delta
 	while _tick_accumulator >= tick_interval:
 		_tick_accumulator -= tick_interval
-		tick_count += 1
-		EventBus.simulation_ticked.emit(tick_count)
+		step_ticks(1)
 
 
 func set_zoom_tier(new_tier: ZoomTier) -> void:
-	if new_tier == current_zoom_tier:
+	if new_tier == _current_zoom_tier:
 		return
-	var previous_tier: ZoomTier = current_zoom_tier
-	current_zoom_tier = new_tier
-	EventBus.zoom_tier_changed.emit(new_tier, previous_tier)
+	var previous_tier: ZoomTier = _current_zoom_tier
+	_current_zoom_tier = new_tier
+	EventBus.zoom_tier_changed.emit(int(new_tier), int(previous_tier))
 
 
 func start_simulation() -> void:
@@ -67,12 +78,42 @@ func get_faction_species(faction_id: StringName) -> SpeciesData:
 	return factions.get(faction_id) as SpeciesData
 
 
+func get_player_faction_id() -> StringName:
+	if world == null:
+		return &""
+	return world.player_faction_id
+
+
+## Advance the simulation `count` ticks immediately (used by tests and tools).
+func step_ticks(count: int) -> void:
+	for _i in count:
+		tick_count += 1
+		if world != null:
+			world.step(tick_count, ai_enabled)
+		EventBus.simulation_ticked.emit(tick_count)
+
+
+func bootstrap_concept_world() -> void:
+	world = SimWorld.new()
+	world.bootstrap_default()
+	commands = CommandService.new()
+	commands.world = world
+	for faction_id: StringName in world.faction_ids():
+		var sim_faction: SimFaction = world.get_faction(faction_id)
+		if not factions.has(faction_id):
+			register_faction(faction_id, sim_faction.species)
+	EventBus.world_bootstrapped.emit()
+
+
 func reset() -> void:
 	stop_simulation()
 	factions.clear()
 	tick_count = 0
 	selected_region_id = &""
 	current_zoom_tier = ZoomTier.ORBIT
+	world = null
+	commands = null
+	ai_enabled = true
 
 
 func _on_region_selected(region_id: StringName) -> void:

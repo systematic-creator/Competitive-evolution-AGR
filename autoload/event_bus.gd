@@ -48,6 +48,26 @@ signal faction_registered(faction_id: StringName, species: SpeciesData)
 @warning_ignore("unused_signal")
 signal faction_resource_changed(faction_id: StringName, resource_id: StringName, amount: int)
 
+## A building was placed (possibly still under construction).
+@warning_ignore("unused_signal")
+signal building_placed(faction_id: StringName, building_id: int, building_type: StringName, grid_pos: Vector2i)
+
+## A building finished construction.
+@warning_ignore("unused_signal")
+signal building_constructed(faction_id: StringName, building_id: int, building_type: StringName, grid_pos: Vector2i)
+
+## A unit entered the simulation.
+@warning_ignore("unused_signal")
+signal unit_spawned(faction_id: StringName, unit_id: int, unit_type: StringName, position: Vector3)
+
+## A unit was ordered to a new destination (move or gather).
+@warning_ignore("unused_signal")
+signal unit_destination_set(unit_id: int, destination: Vector3)
+
+## The concept world finished bootstrapping (factions, region, starting units).
+@warning_ignore("unused_signal")
+signal world_bootstrapped()
+
 # --- Third-person -----------------------------------------------------------
 
 ## The player possessed a unit (enter Tier 4). `unit` is the CharacterBody3D.
