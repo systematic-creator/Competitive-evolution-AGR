@@ -1,34 +1,42 @@
-# Testing on the Godot Android Editor
+# Testing
 
-The project is set up so it opens and runs inside the **Godot 4.3+ Android editor**
-(Google Play / Meta Horizon store build, or the APK from godotengine.org).
+## Desktop concept (OpenXR off)
 
-## Import
+The main scene is `scenes/main_desktop.tscn`. Scroll the mouse wheel to move
+between Orbit / Region / RTS distances. Click a glowing pin (the only
+accessible region is Verdant Basin). Rare-resource icons (iron / coal) appear
+on the Tier 1 pins only after the player reaches that node's `reveal_era`
+(coal at the steam era, iron at era 2). They stay hidden at Stone.
 
-1. Copy `Competitive-evolution-AGR.zip` to your phone (e.g. `Download/`).
-2. Open Godot → Project Manager → **Import** → pick the `.zip`.
-3. Choose an empty folder to extract into → **Import & Edit**.
-4. The first open builds the `.godot/` cache; wait for the import bar to finish.
-
-## Run
-
-Press **Play** (▶). The main scene is `scenes/debug/smoke_test.tscn`. It runs
-self-checks on the autoloads and data Resources and should end with
-`N passed, 0 failed` in green. The buttons let you:
-
-- **Next zoom tier**: cycles ORBIT → REGION → RTS → THIRD_PERSON via `GameState`,
-  logged through `EventBus.zoom_tier_changed`.
-- **Start/Stop sim**: runs the 1-second simulation tick (watch `Tick:`).
-- **Re-run checks**: resets `GameState` and runs all checks again.
+Left-click selects a unit, right-click moves or assigns gather. HUD buttons
+train units (basic workers/soldiers use only common resources; Ironclads and
+Steamwalkers need rare iron/coal) and enter build mode. Space pauses the sim.
+P possesses a selected unit (WASD to walk). Esc releases.
 
 If the editor warns that Vulkan is not supported, switch the renderer to
-**Compatibility** (top-right renderer menu, or
-`rendering/renderer/rendering_method.mobile="gl_compatibility"`).
+**Compatibility** (`--rendering-method gl_compatibility`).
 
-## Before AR export (not needed for this test)
+## Headless tests
 
-These are intentionally off so the project runs on any phone without an
-OpenXR runtime:
+```bash
+godot --headless --path . res://scenes/debug/smoke_test.tscn
+godot --headless --path . res://scenes/debug/sim_tests.tscn
+```
+
+Both print `PASS` / `FAIL` lines and quit non-zero on failure when headless.
+
+Sim tests cover: faction bootstrap (Humans + Sylvari + Kraal + Cogforged),
+AI construction over N ticks, the player command path, common-node
+depletion, Sylvari common-node regrowth (rare nodes do not regrow), Kraal
+faster depletion, era-gated rare-node reveal (coal at the steam era / index 1,
+iron at era 2; visibility is per-faction; AI only targets visible nodes),
+rare-cost gating for later era advances and specialized units, and Cogforged
+extractors boosting rare-node yield.
+
+## Before AR export (not needed for this concept)
+
+These are intentionally off so the project runs on a desktop or any phone
+without an OpenXR runtime:
 
 - `xr/openxr/enabled=true`
 - `rendering/viewport/transparent_background=true`

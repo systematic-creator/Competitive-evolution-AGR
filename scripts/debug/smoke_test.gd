@@ -99,21 +99,27 @@ func _run_checks() -> void:
 	GameState.reset()
 	var color: String = "lime" if _failed == 0 else "red"
 	_log.append_text("\n[b][color=%s]%d passed, %d failed[/color][/b]\n" % [color, _passed, _failed])
+	print("%d passed, %d failed" % [_passed, _failed])
 	_refresh_status()
+	if DisplayServer.get_name() == "headless":
+		get_tree().quit(1 if _failed > 0 else 0)
 
 
 func _check(label: String, ok: bool) -> void:
 	if ok:
 		_passed += 1
 		_log.append_text("[color=lime]PASS[/color]  %s\n" % label)
+		print("PASS  %s" % label)
 	else:
 		_failed += 1
 		_log.append_text("[color=red]FAIL[/color]  %s\n" % label)
+		print("FAIL  %s" % label)
 		push_error("Smoke test failed: %s" % label)
 
 
 func _info(text: String) -> void:
 	_log.append_text("[color=gray]%s[/color]\n" % text)
+	print(text)
 
 
 # --- Live controls ----------------------------------------------------------
