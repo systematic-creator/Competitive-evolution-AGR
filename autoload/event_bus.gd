@@ -117,10 +117,37 @@ signal skirmish_started(skirmish_id: int, attacker_id: StringName, defender_id: 
 @warning_ignore("unused_signal")
 signal skirmish_resolved(skirmish_id: int, winner_id: StringName, loser_id: StringName, node_id: StringName, hex: Vector2i, captured_building_id: int, flipped: bool)
 
-## Player chose Tier 4 possession over auto-battle. Combat itself is stubbed;
-## call `CommandService.resolve_skirmish_auto` to resolve by the sim.
+## A skirmish was started with possession instead of auto-battle. The player's
+## SkirmishPossessionController answers with `CommandService.possess_skirmish_unit`
+## (or `resolve_skirmish_auto` as the fallback when no unit can be possessed).
 @warning_ignore("unused_signal")
 signal skirmish_possession_requested(skirmish_id: int, faction_id: StringName, node_id: StringName, hex: Vector2i)
+
+## The sim handed `unit_id` to the player and the live Tier 4 fight began
+## (also re-emitted when control moves to another squad member).
+@warning_ignore("unused_signal")
+signal skirmish_possession_started(skirmish_id: int, unit_id: int)
+
+## One fixed combat step of a live possession fight ran (`step` counts from 1).
+@warning_ignore("unused_signal")
+signal skirmish_combat_stepped(skirmish_id: int, step: int)
+
+## A combatant took damage in a live fight. `unit_id` -1 is the structure guard.
+@warning_ignore("unused_signal")
+signal skirmish_unit_damaged(skirmish_id: int, unit_id: int, hp: int, max_hp: int)
+
+## The live fight is over on the field. Settle it with
+## `CommandService.resolve_skirmish_possessed` (emits `skirmish_resolved`).
+@warning_ignore("unused_signal")
+signal skirmish_combat_finished(skirmish_id: int, winner_id: StringName)
+
+## A possession skirmish was resolved (field result or auto-battle fallback).
+@warning_ignore("unused_signal")
+signal skirmish_possession_ended(skirmish_id: int, winner_id: StringName)
+
+## A unit died and left the simulation.
+@warning_ignore("unused_signal")
+signal unit_killed(unit_id: int, faction_id: StringName)
 
 ## Desktop HUD entered or left build/claim mode (hex overlay visibility).
 @warning_ignore("unused_signal")

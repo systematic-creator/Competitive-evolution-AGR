@@ -18,6 +18,9 @@ var species_eras: Dictionary = {}
 var world_era_index: int = 0
 var world_era_elapsed: int = 0
 var current_tick: int = 0
+## Fixed combat steps taken by live Tier 4 skirmishes. The strategic tick is
+## held while a fight is live, so (current_tick, combat_step) orders every event.
+var combat_step: int = 0
 var rng: RandomNumberGenerator = RandomNumberGenerator.new()
 var rng_seed: int = 1
 var command_log: Array[Dictionary] = []
@@ -36,6 +39,7 @@ const START_CELLS: Dictionary = {
 func bootstrap_default(p_seed: int = 1) -> void:
 	configure_seed(p_seed)
 	current_tick = 0
+	combat_step = 0
 	command_log.clear()
 	world_era_index = 0
 	world_era_elapsed = 0
@@ -205,6 +209,11 @@ func get_region_data(region_id: StringName) -> RegionData:
 
 
 func step(tick: int, ai_enabled: bool = true) -> void:
+	# Invariant: the strategic clock never advances past a live possession
+	# fight. Live play holds ticks while one runs; if a caller steps anyway
+	# (tests, replays), the fight is fought out first so ordering stays exact.
+	while has_live_combat():
+		step_combat()
 	current_tick = tick
 	upgrades.progress_construction(self)
 	claims.update(self)
@@ -225,7 +234,7 @@ func _move_units() -> void:
 	if playable == null:
 		return
 	for unit: SimUnit in playable.units.values():
-		if unit.view_attached or not unit.has_destination:
+		if unit.view_attached or unit.in_combat or not unit.has_destination:
 			continue
 		var delta: Vector3 = unit.destination - unit.position
 		delta.y = 0.0
@@ -417,6 +426,51 @@ func resolve_skirmish_auto(skirmish_id: int) -> bool:
 	return claims.resolve_auto_battle(self, skirmish_id)
 
 
+## Tier 4: hand `unit_id` (an attacking squad member) to the player and start
+## the live fight for a pending possession skirmish.
+func possess_skirmish_unit(skirmish_id: int, unit_id: int) -> bool:
+	return claims.possess_unit(self, skirmish_id, unit_id)
+
+
+## Tier 4: steer the possessed unit along a quantized sector (-1 = stop).
+func steer_possessed(skirmish_id: int, sector: int) -> bool:
+	return claims.steer_possessed(skirmish_id, sector)
+
+
+## Tier 4: queue a strike for the possessed unit on the next ready combat step.
+func possessed_attack(skirmish_id: int) -> bool:
+	return claims.queue_possessed_attack(skirmish_id)
+
+
+## Tier 4: settle a finished possession fight (captures, claims, signals).
+func resolve_skirmish_possessed(skirmish_id: int) -> bool:
+	return claims.resolve_possessed(self, skirmish_id)
+
+
+func has_live_combat() -> bool:
+	return claims.has_live_combat()
+
+
+## Advance every live skirmish by one fixed combat step. Always bumps
+## `combat_step` so replays can step to a stamped combat step deterministically.
+func step_combat() -> void:
+	combat_step += 1
+	claims.step_combat(self)
+
+
+## Remove a unit that died in combat. Its view frees itself when the unit is gone.
+func kill_unit(unit_id: int) -> bool:
+	if playable == null:
+		return false
+	var unit: SimUnit = playable.get_unit(unit_id)
+	if unit == null:
+		return false
+	var faction_id: StringName = unit.faction_id
+	playable.units.erase(unit_id)
+	EventBus.unit_killed.emit(unit_id, faction_id)
+	return true
+
+
 func capture_building(building_id: int, new_faction_id: StringName) -> bool:
 	if playable == null:
 		return false
@@ -520,6 +574,7 @@ func state_hash() -> int:
 	parts.append("tick=%d" % current_tick)
 	parts.append("world_era=%d" % world_era_index)
 	parts.append("seed=%d" % rng_seed)
+	parts.append("combat_step=%d" % combat_step)
 	parts.append("rng=%d" % rng.state)
 	var ids: Array[StringName] = faction_ids()
 	ids.sort()

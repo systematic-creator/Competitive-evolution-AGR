@@ -37,10 +37,10 @@ res://
 └── scripts/
     ├── ar/                   # Plane detection, anchor placement, pinch-to-scale (future)
     ├── camera/               # ZoomTierController, DesktopRig, ThirdPersonRig
-    ├── desktop/              # MainDesktop, RtsController
+    ├── desktop/              # MainDesktop, RtsController, SkirmishPossessionController
     ├── entities/             # BuildingView, UnitView
-    ├── simulation/           # SimWorld, CommandService, FactionAI, ResourceTick, ...
-    ├── ui/                   # DesktopHud
+    ├── simulation/           # SimWorld, CommandService, FactionAI, ResourceTick, SkirmishCombat, ...
+    ├── ui/                   # DesktopHud, SkirmishTouchControls, VirtualJoystick
     └── world/                # OrbitGlobe, FlatDiorama, RegionPin, BuildGrid
 
 ## 4. The 4-Tier Zoom & Transition Pipeline
@@ -94,7 +94,7 @@ res://
 * Escalation on contested rares is a ladder, not instant war:
   1. **Borders / soft claim:** a node whose center hex lies in a faction's structure territory is soft-claimed.
   2. **Outposts / hard claim:** an outpost on or near a visible rare hard-claims it and extends borders (radius 2).
-  3. **Skirmishes:** limited squad fights over a specific hex. The player may auto-battle (resolved by the sim) or request Tier 4 possession (hook is stubbed; `resolve_skirmish_auto` still settles it). A won auto-battle on a structure's hex captures that structure and transfers its claims.
+  3. **Skirmishes:** limited squad fights over a specific hex. The player may auto-battle (resolved by the sim) or fight it in Tier 4 possession (section 10). A won skirmish on a structure's hex captures that structure and transfers its claims.
 * FactionAI picks the next step with `node_value × personality`: Kraal aggressive, Sylvari defensive, Cogforged methodical.
 * The faint hex overlay (borders from hex ownership) is shown only in Tier 3 build/claim mode.
 
@@ -103,3 +103,12 @@ res://
 * Each species lists the subset it may pursue. **Humans (balanced / player) may use all three.** Kraal: destruction + domination. Sylvari: domination + superiority. Cogforged: superiority + destruction. EventBus emits `victory_progress` and `victory_achieved`; the desktop HUD shows the player's progress.
 * Each species has its own `EraData` track (Humans: Stone–Industrial; Sylvari: Roots–Elderwood; Kraal: Brood–Empire; Cogforged: Clockwork–Synthetics). A shared **world era** advances every 24 ticks and is a soft cap: a faction may be one era ahead at normal cost; each extra era above that multiplies advance costs by 2 (not a hard block).
 * Multiplayer readiness: `SimWorld` owns a seeded `RandomNumberGenerator`. Ticks are fixed-step. All orders go through `CommandService` as tick-stamped dictionaries in `command_log`, which can be replayed. `state_hash()` is the determinism check.
+
+## 10. Tier 4 skirmish possession
+* **Flow:** `start_skirmish(..., auto_battle = false)` emits `skirmish_possession_requested`. `SkirmishPossessionController` (view side) answers for the player with `CommandService.possess_skirmish_unit`, choosing a member of the capped attacking squad (the RTS selection if it is in the squad). With nobody to possess, or while another fight is live, it falls back to `resolve_skirmish_auto`.
+* **Sim:** `SkirmishCombat` (RefCounted, no RNG) holds the squads, the possessed unit, a stationary guard for a defending structure, and an arena (the contested hex plus its ring). `SimWorld.step_combat()` advances every live fight by one fixed combat step (0.1 s). The possessed unit moves only along the steered sector and strikes only when an attack is queued (1.5x damage, cooldown). Every other combatant follows the same deterministic rules. A fight ends when one side is gone, or at 600 steps by remaining strength (ties go to the defender).
+* **Clock:** the strategic tick is held while a fight is live (`GameState` runs combat steps instead). `SimWorld.step()` fights out any live skirmish before advancing, so `(tick, combat_step)` totally orders events. Commands are stamped with both, and `CommandService.replay(log, final_tick, final_combat_step)` reproduces a possession fight exactly.
+* **Orders:** `possess_skirmish_unit`, `steer_possessed` (16 quantized sectors, sent only on change), `possessed_attack`, `resolve_skirmish_possessed` (after `skirmish_combat_finished`) and `resolve_skirmish_auto` (fallback at any time). The controller defers its reactions to sim signals so orders land between combat steps.
+* **Views:** `UnitView` follows `SimUnit.position` / `facing` while `in_combat` (navigation stands down). `ThirdPersonRig` (SpringArm3D) excludes the possessed body from boom collision, and its yaw is driven by the controller so movement is camera-relative. `SkirmishTouchControls` provides the `VirtualJoystick`, Attack and Auto-resolve buttons; desktop uses WASD, F / J, Q / E and Esc.
+* **Signals:** `skirmish_possession_started`, `skirmish_combat_stepped`, `skirmish_unit_damaged`, `skirmish_combat_finished`, `skirmish_possession_ended`, `unit_killed`.
+

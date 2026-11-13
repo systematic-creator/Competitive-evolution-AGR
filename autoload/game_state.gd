@@ -37,6 +37,7 @@ var world: SimWorld
 var commands: CommandService
 
 var _tick_accumulator: float = 0.0
+var _combat_accumulator: float = 0.0
 
 
 func _ready() -> void:
@@ -47,6 +48,14 @@ func _ready() -> void:
 func _process(delta: float) -> void:
 	if not is_simulation_running:
 		return
+	if world != null and world.has_live_combat():
+		# Tier 4 fight: hold the strategic tick and run fixed combat steps.
+		_combat_accumulator += delta
+		while _combat_accumulator >= SkirmishCombat.STEP_SECONDS and world.has_live_combat():
+			_combat_accumulator -= SkirmishCombat.STEP_SECONDS
+			world.step_combat()
+		return
+	_combat_accumulator = 0.0
 	_tick_accumulator += delta
 	while _tick_accumulator >= tick_interval:
 		_tick_accumulator -= tick_interval
@@ -75,6 +84,7 @@ func start_simulation() -> void:
 func stop_simulation() -> void:
 	is_simulation_running = false
 	_tick_accumulator = 0.0
+	_combat_accumulator = 0.0
 
 
 func register_faction(faction_id: StringName, species: SpeciesData) -> void:
@@ -100,6 +110,14 @@ func step_ticks(count: int) -> void:
 		if world != null:
 			world.step(tick_count, ai_enabled)
 		EventBus.simulation_ticked.emit(tick_count)
+
+
+## Advance live possession fights `count` combat steps immediately (tests/tools).
+func step_combat(count: int) -> void:
+	if world == null:
+		return
+	for _i in count:
+		world.step_combat()
 
 
 func bootstrap_concept_world(seed: int = 1) -> void:

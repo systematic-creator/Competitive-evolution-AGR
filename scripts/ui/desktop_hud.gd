@@ -55,6 +55,11 @@ func _ready() -> void:
 	_refresh()
 
 
+func show_message(text: String) -> void:
+	if _log != null:
+		_log.text = text
+
+
 func pending_build_type() -> StringName:
 	return _build_type
 
@@ -91,16 +96,16 @@ func _contest_possess() -> void:
 		return
 	var target: Dictionary = GameState.world.claims.find_skirmish_target(GameState.world, GameState.get_player_faction_id())
 	if target.is_empty():
+		show_message("Contest needs a soldier standing in an enemy-held hex of a revealed rare node.")
 		return
-	# Stub: emit the possession hook and enter Tier 4 if a unit exists; do not resolve combat.
+	# Start a possession skirmish. SkirmishPossessionController answers the
+	# possession request (Tier 4), or falls back to auto-battle.
 	GameState.commands.start_skirmish(
 		GameState.get_player_faction_id(),
 		target["node_id"] as StringName,
 		target["hex"] as Vector2i,
 		false
 	)
-	EventBus.unit_possessed.emit(null)
-	GameState.current_zoom_tier = GameState.ZoomTier.THIRD_PERSON
 	_refresh()
 
 

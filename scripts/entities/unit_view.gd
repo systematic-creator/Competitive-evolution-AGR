@@ -25,6 +25,7 @@ func _ready() -> void:
 	add_child(col)
 	EventBus.era_changed.connect(_on_era_changed)
 	EventBus.unit_destination_set.connect(_on_destination)
+	EventBus.skirmish_unit_damaged.connect(_on_skirmish_damaged)
 	set_physics_process(true)
 
 
@@ -58,6 +59,12 @@ func _physics_process(delta: float) -> void:
 	if unit == null:
 		queue_free()
 		return
+	if unit.in_combat:
+		# SkirmishCombat owns the position during a Tier 4 fight; just follow it.
+		var weight: float = clampf(delta * 12.0, 0.0, 1.0)
+		global_position = global_position.lerp(unit.position + Vector3(0.0, 0.02, 0.0), weight)
+		rotation.y = lerp_angle(rotation.y, unit.facing, weight)
+		return
 	if unit.has_destination:
 		agent.target_position = unit.destination
 		if not agent.is_navigation_finished():
@@ -74,6 +81,14 @@ func _physics_process(delta: float) -> void:
 			global_position = unit.destination + Vector3(0.0, 0.02, 0.0)
 	else:
 		global_position = global_position.lerp(unit.position + Vector3(0.0, 0.02, 0.0), clampf(delta * 8.0, 0.0, 1.0))
+
+
+func _on_skirmish_damaged(_skirmish_id: int, id: int, _hp: int, _max_hp: int) -> void:
+	if id != unit_id or not is_inside_tree():
+		return
+	_slot.scale = Vector3.ONE * 1.35
+	var tween: Tween = create_tween()
+	tween.tween_property(_slot, "scale", Vector3.ONE, 0.18)
 
 
 func _on_destination(id: int, destination: Vector3) -> void:

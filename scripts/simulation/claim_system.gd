@@ -249,15 +249,35 @@ func resolve_auto_battle(world: SimWorld, skirmish_id: int) -> bool:
 	var record: Dictionary = pending[skirmish_id] as Dictionary
 	if bool(record.get("resolved", false)):
 		return false
+	var combat: SkirmishCombat = record.get("combat", null) as SkirmishCombat
+	if combat != null:
+		# Auto-battle fallback during (or after) a possession fight: settle it
+		# from what is left on the field instead of the opening squads.
+		var verdict: StringName = combat.winner_id if combat.finished else combat.decide_by_strength(world)
+		_finish_skirmish(world, record, verdict)
+		return true
 	refresh_occupation(world.playable)
 	var hex: Vector2i = HexGrid.unpack(int(record.get("hex_key", 0)))
 	var attacker_id: StringName = record["attacker"] as StringName
 	var defender_id: StringName = record["defender"] as StringName
-	var node_id: StringName = record["node_id"] as StringName
 	var attack: float = _squad_strength(world, attacker_id, hex, false)
 	var defense: float = _squad_strength(world, defender_id, hex, true)
 	var winner: StringName = attacker_id if attack > defense else defender_id
+	_finish_skirmish(world, record, winner)
+	return true
+
+
+func _finish_skirmish(world: SimWorld, record: Dictionary, winner: StringName) -> void:
+	var skirmish_id: int = int(record.get("id", -1))
+	var hex: Vector2i = HexGrid.unpack(int(record.get("hex_key", 0)))
+	var attacker_id: StringName = record["attacker"] as StringName
+	var defender_id: StringName = record["defender"] as StringName
+	var node_id: StringName = record["node_id"] as StringName
 	var loser: StringName = defender_id if winner == attacker_id else attacker_id
+	var combat: SkirmishCombat = record.get("combat", null) as SkirmishCombat
+	if combat != null:
+		combat.release_units(world)
+		refresh_occupation(world.playable)
 	var flipped: bool = false
 	var captured_id: int = -1
 	if winner == attacker_id:
@@ -271,7 +291,141 @@ func resolve_auto_battle(world: SimWorld, skirmish_id: int) -> bool:
 	record["winner"] = winner
 	record["flipped"] = flipped
 	EventBus.skirmish_resolved.emit(skirmish_id, winner, loser, node_id, hex, captured_id, flipped)
+	if combat != null:
+		EventBus.skirmish_possession_ended.emit(skirmish_id, winner)
+
+
+# --- Tier 4 possession ------------------------------------------------------
+
+## Attacking squad members the player may possess for a pending skirmish:
+## the same (capped) squad auto-battle would field, living and military.
+func possession_candidates(world: SimWorld, skirmish_id: int) -> Array[SimUnit]:
+	var out: Array[SimUnit] = []
+	if world == null or world.playable == null or not pending.has(skirmish_id):
+		return out
+	var record: Dictionary = pending[skirmish_id] as Dictionary
+	if bool(record.get("resolved", false)):
+		return out
+	var combat: SkirmishCombat = record.get("combat", null) as SkirmishCombat
+	if combat != null:
+		if combat.finished:
+			return out
+		return combat.living(world, combat.attackers)
+	refresh_occupation(world.playable)
+	var hex: Vector2i = HexGrid.unpack(int(record.get("hex_key", 0)))
+	return _squad_units(world.playable, record["attacker"] as StringName, hex)
+
+
+func possess_unit(world: SimWorld, skirmish_id: int, unit_id: int) -> bool:
+	if world == null or world.playable == null or not pending.has(skirmish_id):
+		return false
+	var record: Dictionary = pending[skirmish_id] as Dictionary
+	if bool(record.get("resolved", false)):
+		return false
+	var unit: SimUnit = world.playable.get_unit(unit_id)
+	if unit == null or unit.hp <= 0:
+		return false
+	var combat: SkirmishCombat = record.get("combat", null) as SkirmishCombat
+	if combat != null:
+		# Re-possess another living attacker (e.g. after the first one fell).
+		if combat.finished or not combat.is_attacker_unit(unit_id):
+			return false
+		combat.possessed_unit_id = unit_id
+		combat.steer_sector = -1
+		combat.attack_queued = false
+		EventBus.skirmish_possession_started.emit(skirmish_id, unit_id)
+		return true
+	var candidates: Array[SimUnit] = possession_candidates(world, skirmish_id)
+	if not candidates.has(unit):
+		return false
+	var hex: Vector2i = HexGrid.unpack(int(record.get("hex_key", 0)))
+	var defender_id: StringName = record["defender"] as StringName
+	var defender_units: Array[SimUnit] = []
+	if defender_id != &"":
+		defender_units = _squad_units(world.playable, defender_id, hex)
+	combat = SkirmishCombat.new()
+	combat.setup(world, record, candidates, defender_units, unit_id)
+	record["combat"] = combat
+	EventBus.skirmish_possession_started.emit(skirmish_id, unit_id)
 	return true
+
+
+func steer_possessed(skirmish_id: int, sector: int) -> bool:
+	var combat: SkirmishCombat = live_combat(skirmish_id)
+	if combat == null or combat.possessed_unit_id < 0:
+		return false
+	combat.steer_sector = -1 if sector < 0 else posmod(sector, SkirmishCombat.STEER_SECTORS)
+	return true
+
+
+func queue_possessed_attack(skirmish_id: int) -> bool:
+	var combat: SkirmishCombat = live_combat(skirmish_id)
+	if combat == null or combat.possessed_unit_id < 0:
+		return false
+	combat.attack_queued = true
+	return true
+
+
+## Settle a possession fight that has finished on the field.
+func resolve_possessed(world: SimWorld, skirmish_id: int) -> bool:
+	if not pending.has(skirmish_id):
+		return false
+	var record: Dictionary = pending[skirmish_id] as Dictionary
+	var combat: SkirmishCombat = record.get("combat", null) as SkirmishCombat
+	if combat == null or not combat.finished or bool(record.get("resolved", false)):
+		return false
+	_finish_skirmish(world, record, combat.winner_id)
+	return true
+
+
+## The unresolved, still-fighting combat for `skirmish_id`, or null.
+func live_combat(skirmish_id: int) -> SkirmishCombat:
+	if not pending.has(skirmish_id):
+		return null
+	var record: Dictionary = pending[skirmish_id] as Dictionary
+	if bool(record.get("resolved", false)):
+		return null
+	var combat: SkirmishCombat = record.get("combat", null) as SkirmishCombat
+	if combat == null or combat.finished:
+		return null
+	return combat
+
+
+## Any combat (live or finished) attached to an unresolved skirmish.
+func combat_for(skirmish_id: int) -> SkirmishCombat:
+	if not pending.has(skirmish_id):
+		return null
+	return (pending[skirmish_id] as Dictionary).get("combat", null) as SkirmishCombat
+
+
+func has_live_combat() -> bool:
+	for sid: int in _sorted_pending_ids():
+		if live_combat(sid) != null:
+			return true
+	return false
+
+
+func step_combat(world: SimWorld) -> void:
+	for sid: int in _sorted_pending_ids():
+		var combat: SkirmishCombat = live_combat(sid)
+		if combat == null:
+			continue
+		combat.step(world)
+		for event: Dictionary in combat.damage_events:
+			EventBus.skirmish_unit_damaged.emit(sid, int(event["unit_id"]), int(event["hp"]), int(event["max_hp"]))
+		if not combat.killed_this_step.is_empty():
+			refresh_occupation(world.playable)
+		EventBus.skirmish_combat_stepped.emit(sid, combat.steps)
+		if combat.finished:
+			EventBus.skirmish_combat_finished.emit(sid, combat.winner_id)
+
+
+func _sorted_pending_ids() -> Array[int]:
+	var ids: Array[int] = []
+	for sid: Variant in pending.keys():
+		ids.append(int(sid))
+	ids.sort()
+	return ids
 
 
 func _defender_for(region: SimRegion, hex: Vector2i) -> StringName:
@@ -295,25 +449,30 @@ func _faction_occupies_hex(region: SimRegion, faction_id: StringName, hex: Vecto
 	return false
 
 
+## Up to SKIRMISH_SQUAD_CAP living military units of `faction_id` on the
+## contested hex, then its immediate neighbors (deterministic order).
+func _squad_units(region: SimRegion, faction_id: StringName, hex: Vector2i) -> Array[SimUnit]:
+	var squad: Array[SimUnit] = []
+	if faction_id == &"":
+		return squad
+	for candidate: Vector2i in region.hex_grid.hexes_in_radius(hex, 1):
+		for unit: SimUnit in region.units_occupying(candidate):
+			if unit.faction_id != faction_id or not SimCatalog.is_military(unit.unit_type) or unit.hp <= 0:
+				continue
+			if squad.size() >= SKIRMISH_SQUAD_CAP:
+				return squad
+			squad.append(unit)
+	return squad
+
+
 func _squad_strength(world: SimWorld, faction_id: StringName, hex: Vector2i, defending: bool) -> float:
 	if faction_id == &"":
 		return STRUCTURE_DEFENSE if defending and world.playable.structure_on_hex(hex) != null else 0.0
 	var region: SimRegion = world.playable
 	var strength: float = 0.0
-	var counted: int = 0
-	# Occupants of the contested hex first, then immediate neighbors.
-	var hexes: Array[Vector2i] = region.hex_grid.hexes_in_radius(hex, 1)
-	for candidate: Vector2i in hexes:
-		for unit: SimUnit in region.units_occupying(candidate):
-			if unit.faction_id != faction_id or not SimCatalog.is_military(unit.unit_type):
-				continue
-			if counted >= SKIRMISH_SQUAD_CAP:
-				break
-			var ratio: float = 1.0 if unit.max_hp <= 0 else float(unit.hp) / float(unit.max_hp)
-			strength += SimCatalog.unit_combat_power(unit.unit_type) * ratio
-			counted += 1
-		if counted >= SKIRMISH_SQUAD_CAP:
-			break
+	for unit: SimUnit in _squad_units(region, faction_id, hex):
+		var ratio: float = 1.0 if unit.max_hp <= 0 else float(unit.hp) / float(unit.max_hp)
+		strength += SimCatalog.unit_combat_power(unit.unit_type) * ratio
 	if defending:
 		var structure: SimBuilding = region.structure_on_hex(hex)
 		if structure != null and structure.faction_id == faction_id:

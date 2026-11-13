@@ -7,6 +7,7 @@ var globe: OrbitGlobe
 var diorama: FlatDiorama
 var hud: DesktopHud
 var rts: RtsController
+var skirmish: SkirmishPossessionController
 var _anchor: Node3D
 
 
@@ -33,6 +34,14 @@ func _ready() -> void:
 	add_child(hud)
 	rts = RtsController.new()
 	add_child(rts)
+	skirmish = SkirmishPossessionController.new()
+	skirmish.name = "SkirmishPossession"
+	skirmish.third = third
+	skirmish.rts = rts
+	skirmish.hud = hud
+	skirmish.view_lookup = _find_unit_view
+	add_child(skirmish)
+	rts.skirmish = skirmish
 	GameState.bootstrap_concept_world()
 	GameState.start_simulation()
 	rts.camera = rig.camera
@@ -95,8 +104,10 @@ func _on_transition(progress: float) -> void:
 		diorama.scale = Vector3.ONE
 
 
-func _on_possessed(_unit: Node3D) -> void:
-	var view: UnitView = _find_unit_view(rts.selected_unit_id)
+func _on_possessed(unit: Node3D) -> void:
+	var view: UnitView = unit as UnitView
+	if view == null:
+		view = _find_unit_view(rts.selected_unit_id)
 	rig.third_person = true
 	rig.camera.current = false
 	if view != null:
@@ -116,6 +127,8 @@ func _on_released() -> void:
 
 
 func _find_unit_view(unit_id: int) -> UnitView:
+	if diorama == null or diorama._entities == null:
+		return null
 	for child in diorama._entities.get_children():
 		if child is UnitView and (child as UnitView).unit_id == unit_id:
 			return child as UnitView

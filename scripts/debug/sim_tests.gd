@@ -26,6 +26,11 @@ func _run() -> void:
 	_test_soft_cap_cost_scaling()
 	_test_win_conditions()
 	_test_determinism()
+	_test_possession_lifecycle()
+	_test_possession_field_victory()
+	_test_possession_auto_fallback_and_timeout()
+	_test_possession_replay()
+	await _test_possession_controller()
 	print("%d passed, %d failed" % [_passed, _failed])
 	var code: int = 1 if _failed > 0 else 0
 	if DisplayServer.get_name() == "headless":
@@ -762,3 +767,346 @@ func _test_determinism() -> void:
 	commands.move_unit(worker.id, worker.position + Vector3(0.12, 0.0, 0.04))
 	GameState.step_ticks(5)
 	_check("two live runs with the same seed and commands share a hash", world.state_hash() == hash_a)
+
+
+# --- Tier 4 skirmish possession ---------------------------------------------
+
+## Deterministic possession scenario. Non-command setup only (eras, stock,
+## soldiers); the Kraal outpost and the skirmish are issued as commands by the
+## caller so a replay can rebuild the same world from the command log.
+## Returns {"iron", "cell", "hex", "attackers": Array[int], "defender": int}.
+func _possession_setup(seed: int, attacker_count: int, defender_count: int) -> Dictionary:
+	GameState.reset()
+	GameState.ai_enabled = false
+	GameState.bootstrap_concept_world(seed)
+	var world: SimWorld = GameState.world
+	var region: SimRegion = world.playable
+	var iron: SimResourceNode = _first_node(world, true, SimIds.IRON)
+	world.set_faction_era(SimIds.PLAYER_FACTION, 2)
+	world.set_faction_era(&"kraal", 2)
+	world.get_faction(&"kraal").set_resource(SimIds.WOOD, 200)
+	world.get_faction(&"kraal").set_resource(SimIds.STONE, 200)
+	var cell: Vector2i = iron.cell
+	if not region.can_place(cell, SimIds.OUTPOST, false):
+		cell = _structure_cell_at_distance(world, iron.hex, 0)
+	if cell.x < 0:
+		cell = _structure_cell_at_distance(world, iron.hex, 1)
+	var hex: Vector2i = region.hex_at_cell(cell)
+	var spot: Vector3 = region.hex_grid.axial_to_world(hex)
+	var attackers: Array[int] = []
+	for i: int in attacker_count:
+		attackers.append(world._spawn_unit(SimIds.PLAYER_FACTION, SimIds.SOLDIER, spot).id)
+	var defender: int = -1
+	for i: int in defender_count:
+		defender = world._spawn_unit(&"kraal", SimIds.SOLDIER, spot).id
+	return {"iron": iron, "cell": cell, "hex": hex, "attackers": attackers, "defender": defender}
+
+
+## Kraal builds the outpost (command), then the player opens a possession
+## skirmish on its hex (command). Returns the skirmish id (or -1).
+func _possession_open(setup: Dictionary) -> int:
+	var commands: CommandService = GameState.commands
+	var iron: SimResourceNode = setup["iron"] as SimResourceNode
+	var outpost_id: int = commands.place_building(&"kraal", SimIds.OUTPOST, setup["cell"] as Vector2i)
+	setup["outpost"] = outpost_id
+	GameState.step_ticks(5)
+	return commands.start_skirmish(SimIds.PLAYER_FACTION, iron.node_id, setup["hex"] as Vector2i, false)
+
+
+func _test_possession_lifecycle() -> void:
+	var setup: Dictionary = _possession_setup(3, 4, 1)
+	var world: SimWorld = GameState.world
+	var commands: CommandService = GameState.commands
+	var requested: Array[int] = []
+	var on_request := func(sid: int, _fid: StringName, _nid: StringName, _hex: Vector2i) -> void: requested.append(sid)
+	EventBus.skirmish_possession_requested.connect(on_request)
+	var sid: int = _possession_open(setup)
+	EventBus.skirmish_possession_requested.disconnect(on_request)
+	var outpost: SimBuilding = world.playable.get_building(int(setup["outpost"]))
+	_check("possession: kraal outpost stands on the contested hex", outpost != null and outpost.constructed)
+	_check("possession: request leaves the skirmish pending with no fight yet", (
+		sid >= 0 and requested.has(sid) and not world.has_live_combat()
+	))
+	var worker: SimUnit = world._spawn_unit(SimIds.PLAYER_FACTION, SimIds.WORKER, world.playable.hex_grid.axial_to_world(setup["hex"] as Vector2i))
+	world.claims.refresh_occupation(world.playable)
+	var candidates: Array[SimUnit] = world.claims.possession_candidates(world, sid)
+	var all_player_soldiers: bool = true
+	for unit: SimUnit in candidates:
+		if unit.faction_id != SimIds.PLAYER_FACTION or unit.unit_type == SimIds.WORKER:
+			all_player_soldiers = false
+	_check("possession: candidates are the capped attacking squad", (
+		candidates.size() == ClaimSystem.SKIRMISH_SQUAD_CAP and all_player_soldiers
+	))
+	_check("possession: an enemy soldier cannot be possessed", not commands.possess_skirmish_unit(sid, int(setup["defender"])))
+	_check("possession: a worker cannot be possessed", not commands.possess_skirmish_unit(sid, worker.id))
+	_check("possession: steering is rejected before possession", not commands.steer_possessed(sid, 4))
+	var started: Array[int] = []
+	var on_started := func(_sid: int, uid: int) -> void: started.append(uid)
+	EventBus.skirmish_possession_started.connect(on_started)
+	var hero_id: int = candidates[0].id
+	_check("possession: possess_skirmish_unit starts the live fight", commands.possess_skirmish_unit(sid, hero_id))
+	EventBus.skirmish_possession_started.disconnect(on_started)
+	var combat: SkirmishCombat = world.claims.live_combat(sid)
+	var hero: SimUnit = world.playable.get_unit(hero_id)
+	_check("possession: started signal names the possessed unit", _only(started, hero_id))
+	_check("possession: combat enlists both squads and the outpost guard", (
+		combat != null and combat.attackers.size() == 3 and combat.defenders.size() == 1
+		and combat.guard_max_hp == SkirmishCombat.GUARD_HP and hero.in_combat
+	))
+	_check("possession: a second possess of the same unit is rejected mid-fight for non-squad units", (
+		not commands.possess_skirmish_unit(sid, worker.id)
+	))
+	_check("possession: resolve_skirmish_possessed is rejected while the fight is live", not commands.resolve_skirmish_possessed(sid))
+	# Steering: sector 4 is due east (+X).
+	var start_pos: Vector3 = hero.position
+	_check("possession: steer command accepted", commands.steer_possessed(sid, 4))
+	GameState.step_combat(3)
+	_check("possession: steering moves the possessed unit along its sector", (
+		hero.position.x > start_pos.x + 0.01 and absf(hero.position.z - start_pos.z) < 0.001
+	))
+	_check("possession: the unit stays inside the contested arena", (
+		Vector2(hero.position.x - combat.center.x, hero.position.z - combat.center.z).length() <= combat.arena_radius + 0.0001
+	))
+	var tick_before: int = world.current_tick
+	_check("possession: strategic tick is held while the fight is live", world.has_live_combat() and world.current_tick == tick_before)
+	# Stepping the strategic clock anyway fights the skirmish out first.
+	commands.steer_possessed(sid, -1)
+	GameState.step_ticks(1)
+	_check("possession: stepping a tick finishes the live fight before the tick", (
+		combat.finished and not world.has_live_combat() and world.current_tick == tick_before + 1
+	))
+
+
+func _test_possession_field_victory() -> void:
+	var setup: Dictionary = _possession_setup(5, 2, 1)
+	var world: SimWorld = GameState.world
+	var commands: CommandService = GameState.commands
+	var sid: int = _possession_open(setup)
+	var hero_id: int = (setup["attackers"] as Array[int])[0]
+	commands.possess_skirmish_unit(sid, hero_id)
+	var combat: SkirmishCombat = world.claims.live_combat(sid)
+	var defender: SimUnit = world.playable.get_unit(int(setup["defender"]))
+	var defender_hp: int = defender.hp
+	# One possessed strike: base 8 x soldier power 1.0 x possession bonus 1.5.
+	var ally: SimUnit = world.playable.get_unit((setup["attackers"] as Array[int])[1])
+	ally.in_combat = false  # keep the AI ally out of this single-strike check
+	combat.attackers.erase(ally.id)
+	_check("possession: attack command queues a strike", commands.possessed_attack(sid) and combat.attack_queued)
+	_check("possession: a queued strike blocks re-queuing", not combat.can_possessed_attack())
+	GameState.step_combat(1)
+	_check("possession: possessed strike deals the boosted damage", defender.hp == defender_hp - 12)
+	commands.possessed_attack(sid)
+	GameState.step_combat(1)
+	_check("possession: attack cooldown prevents a second strike next step", defender.hp == defender_hp - 12)
+	combat.attackers.append(ally.id)
+	ally.in_combat = true
+	var killed: Array[int] = []
+	var on_killed := func(uid: int, _fid: StringName) -> void: killed.append(uid)
+	var finished: Array[StringName] = []
+	var on_finished := func(_sid: int, winner: StringName) -> void: finished.append(winner)
+	EventBus.unit_killed.connect(on_killed)
+	EventBus.skirmish_combat_finished.connect(on_finished)
+	var guard: int = 0
+	while world.has_live_combat() and guard < SkirmishCombat.MAX_STEPS:
+		if combat.can_possessed_attack():
+			commands.possessed_attack(sid)
+		GameState.step_combat(1)
+		guard += 1
+	EventBus.unit_killed.disconnect(on_killed)
+	EventBus.skirmish_combat_finished.disconnect(on_finished)
+	_check("possession: the fight ends on the field before the time limit", combat.finished and not combat.timed_out)
+	_check("possession: attackers beat the defender and the guard", (
+		combat.winner_id == SimIds.PLAYER_FACTION and _only(finished, SimIds.PLAYER_FACTION)
+	))
+	_check("possession: the fallen defender leaves the sim", (
+		killed.has(int(setup["defender"])) and world.playable.get_unit(int(setup["defender"])) == null
+	))
+	var resolved: Array[bool] = []
+	var on_resolved := func(rsid: int, winner: StringName, _l: StringName, _n: StringName, _h: Vector2i, cap: int, flipped: bool) -> void:
+		resolved.append(rsid == sid and winner == SimIds.PLAYER_FACTION and flipped and cap == int(setup["outpost"]))
+	var ended: Array[int] = []
+	var on_ended := func(esid: int, _w: StringName) -> void: ended.append(esid)
+	EventBus.skirmish_resolved.connect(on_resolved)
+	EventBus.skirmish_possession_ended.connect(on_ended)
+	var resolved_ok: bool = commands.resolve_skirmish_possessed(sid)
+	EventBus.skirmish_resolved.disconnect(on_resolved)
+	EventBus.skirmish_possession_ended.disconnect(on_ended)
+	var iron: SimResourceNode = setup["iron"] as SimResourceNode
+	_check("possession: resolve_skirmish_possessed settles the finished fight", resolved_ok and resolved.has(true) and _only(ended, sid))
+	_check("possession: winning captures the outpost and its hard claim", (
+		world.playable.get_building(int(setup["outpost"])).faction_id == SimIds.PLAYER_FACTION
+		and iron.hard_claimer == SimIds.PLAYER_FACTION
+	))
+	var hero: SimUnit = world.playable.get_unit(hero_id)
+	_check("possession: survivors return to normal sim control", hero != null and not hero.in_combat)
+	_check("possession: a settled skirmish cannot be resolved twice", (
+		not commands.resolve_skirmish_possessed(sid) and not commands.resolve_skirmish_auto(sid)
+	))
+	var logged: Array[StringName] = []
+	for item: Dictionary in world.command_log:
+		logged.append(item.get("type", &"") as StringName)
+	_check("possession: every order went through the command log", (
+		logged.has(&"possess_skirmish_unit") and logged.has(&"possessed_attack") and logged.has(&"resolve_skirmish_possessed")
+	))
+
+
+func _test_possession_auto_fallback_and_timeout() -> void:
+	# Auto-battle fallback in the middle of a live fight.
+	var setup: Dictionary = _possession_setup(9, 2, 1)
+	var world: SimWorld = GameState.world
+	var commands: CommandService = GameState.commands
+	var sid: int = _possession_open(setup)
+	commands.possess_skirmish_unit(sid, (setup["attackers"] as Array[int])[0])
+	GameState.step_combat(2)
+	var combat: SkirmishCombat = world.claims.live_combat(sid)
+	var expected: StringName = combat.decide_by_strength(world)
+	var ended: Array[StringName] = []
+	var on_ended := func(_esid: int, winner: StringName) -> void: ended.append(winner)
+	EventBus.skirmish_possession_ended.connect(on_ended)
+	_check("possession: auto-battle fallback resolves a live possession fight", commands.resolve_skirmish_auto(sid))
+	EventBus.skirmish_possession_ended.disconnect(on_ended)
+	_check("possession: fallback uses the strength left on the field", _only(ended, expected))
+	_check("possession: fallback releases every combatant", (
+		not world.has_live_combat()
+		and not world.playable.get_unit((setup["attackers"] as Array[int])[0]).in_combat
+	))
+	# Timeout: a lone possessed soldier keeps out of the guard's reach.
+	setup = _possession_setup(11, 1, 0)
+	world = GameState.world
+	commands = GameState.commands
+	sid = _possession_open(setup)
+	commands.possess_skirmish_unit(sid, (setup["attackers"] as Array[int])[0])
+	commands.steer_possessed(sid, 8)
+	GameState.step_combat(SkirmishCombat.MAX_STEPS)
+	combat = world.claims.combat_for(sid)
+	_check("possession: a stalled fight times out at the step limit", combat.finished and combat.timed_out and combat.steps == SkirmishCombat.MAX_STEPS)
+	_check("possession: timeout is settled by remaining strength (1 soldier > guard)", combat.winner_id == SimIds.PLAYER_FACTION)
+	_check("possession: timed-out fight resolves through CommandService", commands.resolve_skirmish_possessed(sid))
+
+
+func _run_possession_script(seed: int) -> Dictionary:
+	var setup: Dictionary = _possession_setup(seed, 2, 1)
+	var world: SimWorld = GameState.world
+	var commands: CommandService = GameState.commands
+	var sid: int = _possession_open(setup)
+	commands.possess_skirmish_unit(sid, (setup["attackers"] as Array[int])[0])
+	var sectors: Array[int] = [2, 2, 6, 6, 10, -1, 14, 0, -1]
+	var i: int = 0
+	while world.has_live_combat() and i < SkirmishCombat.MAX_STEPS:
+		if i % 7 == 0:
+			commands.steer_possessed(sid, sectors[(i / 7) % sectors.size()])
+		if i % 3 == 0 and world.claims.live_combat(sid).can_possessed_attack():
+			commands.possessed_attack(sid)
+		GameState.step_combat(1)
+		i += 1
+	commands.resolve_skirmish_possessed(sid)
+	GameState.step_ticks(3)
+	var log: Array = []
+	for item: Dictionary in world.command_log:
+		log.append(item.duplicate())
+	return {"hash": world.state_hash(), "log": log, "tick": world.current_tick, "combat_step": world.combat_step}
+
+
+func _test_possession_replay() -> void:
+	var first: Dictionary = _run_possession_script(21)
+	var second: Dictionary = _run_possession_script(21)
+	_check("possession: two live runs with the same seed and orders share a hash", (
+		int(first["hash"]) == int(second["hash"]) and int(first["combat_step"]) > 0
+	))
+	var log: Array = first["log"] as Array
+	var steer_stamps_ok: bool = false
+	for item: Variant in log:
+		var command: Dictionary = item as Dictionary
+		if command.get("type", &"") == &"steer_possessed" and int(command.get("combat_step", -1)) > 0:
+			steer_stamps_ok = true
+	_check("possession: orders are stamped with tick and combat step", steer_stamps_ok)
+	# Rebuild the same non-command setup, then replay the log.
+	_possession_setup(21, 2, 1)
+	GameState.commands.replay(log, int(first["tick"]), int(first["combat_step"]))
+	_check("possession: replaying the command log reproduces the fight exactly", (
+		GameState.world.state_hash() == int(first["hash"])
+	))
+
+
+func _test_possession_controller() -> void:
+	var rig := ThirdPersonRig.new()
+	add_child(rig)
+	var controller := SkirmishPossessionController.new()
+	controller.third = rig
+	add_child(controller)
+	# AI-initiated possession requests are not the player's to take.
+	EventBus.skirmish_possession_requested.emit(99, &"kraal", &"none", Vector2i.ZERO)
+	await get_tree().process_frame
+	_check("controller: ignores possession requests from AI factions", not controller.is_active())
+	# Player request: the controller possesses through CommandService.
+	var setup: Dictionary = _possession_setup(31, 2, 1)
+	var world: SimWorld = GameState.world
+	var sid: int = _possession_open(setup)
+	await get_tree().process_frame
+	_check("controller: answers the request by possessing a squad member", (
+		controller.is_active() and controller.skirmish_id == sid and world.claims.live_combat(sid) != null
+		and (setup["attackers"] as Array[int]).has(controller.unit_id)
+	))
+	_check("controller: enters Tier 4 and shows the touch controls", (
+		GameState.current_zoom_tier == GameState.ZoomTier.THIRD_PERSON and controller.controls.visible
+	))
+	# Virtual joystick right -> camera-relative world direction -> sector order.
+	controller.camera_yaw = 0.0
+	controller.controls.joystick.value = Vector2(1.0, 0.0)
+	await get_tree().process_frame
+	var combat: SkirmishCombat = world.claims.live_combat(sid)
+	var expected_sector: int = SkirmishCombat.direction_to_sector(
+		SkirmishPossessionController.camera_relative_direction(Vector2(1.0, 0.0), 0.0)
+	)
+	_check("controller: joystick right with camera yaw 0 steers east (sector 4)", expected_sector == 4 and combat.steer_sector == 4)
+	controller.controls.joystick.value = Vector2.ZERO
+	controller.controls.attack_held = true
+	await get_tree().process_frame
+	_check("controller: holding Attack queues a strike", combat.attack_queued)
+	controller.controls.attack_held = false
+	controller.request_auto_resolve()
+	_check("controller: Auto-resolve falls back to auto-battle and exits Tier 4", (
+		not controller.is_active() and not controller.controls.visible
+		and GameState.current_zoom_tier == GameState.ZoomTier.RTS
+	))
+	var kinds: Array[StringName] = []
+	for item: Dictionary in world.command_log:
+		kinds.append(item.get("type", &"") as StringName)
+	_check("controller: orders were issued only through CommandService", (
+		kinds.has(&"possess_skirmish_unit") and kinds.has(&"steer_possessed")
+		and kinds.has(&"possessed_attack") and kinds.has(&"resolve_skirmish")
+	))
+	# Field finish: the controller resolves through CommandService when the fight ends.
+	setup = _possession_setup(33, 2, 1)
+	world = GameState.world
+	sid = _possession_open(setup)
+	await get_tree().process_frame
+	var guard: int = 0
+	while world.has_live_combat() and guard < SkirmishCombat.MAX_STEPS:
+		GameState.step_combat(1)
+		guard += 1
+	await get_tree().process_frame
+	var record: Dictionary = world.claims.pending.get(sid, {}) as Dictionary
+	var last_kind: StringName = world.command_log.back().get("type", &"") as StringName
+	_check("controller: a finished fight is resolved via resolve_skirmish_possessed", (
+		bool(record.get("resolved", false)) and last_kind == &"resolve_skirmish_possessed" and not controller.is_active()
+	))
+	# Fallback when nobody can be possessed (the squad fell before possession).
+	setup = _possession_setup(35, 1, 1)
+	world = GameState.world
+	sid = _possession_open(setup)
+	world.kill_unit((setup["attackers"] as Array[int])[0])
+	await get_tree().process_frame
+	record = world.claims.pending.get(sid, {}) as Dictionary
+	_check("controller: falls back to auto-battle when no unit can be possessed", (
+		bool(record.get("resolved", false)) and not controller.is_active()
+		and (world.command_log.back().get("type", &"") as StringName) == &"resolve_skirmish"
+	))
+	controller.queue_free()
+	rig.queue_free()
+	GameState.reset()
+
+
+## True when `items` holds exactly one element equal to `value`.
+func _only(items: Array, value: Variant) -> bool:
+	return items.size() == 1 and items[0] == value

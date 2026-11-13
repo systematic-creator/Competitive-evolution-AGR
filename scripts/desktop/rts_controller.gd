@@ -4,6 +4,8 @@ extends Node
 
 var camera: Camera3D
 var hud: DesktopHud
+## Tier 4 skirmish possession owns P / Esc while a fight is live.
+var skirmish: SkirmishPossessionController
 var selected_unit_id: int = -1
 var _possessed_id: int = -1
 
@@ -13,6 +15,10 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if event is InputEventKey and event.pressed:
 		var key: InputEventKey = event
+		if skirmish != null and skirmish.is_active() and (key.keycode == KEY_P or key.keycode == KEY_ESCAPE):
+			if key.keycode == KEY_ESCAPE:
+				skirmish.request_auto_resolve()
+			return
 		if key.keycode == KEY_P:
 			_toggle_possess()
 			return
