@@ -12,6 +12,7 @@ config_version=5
 
 config/name="Competitive Evolution AGR"
 config/description="AR multi-scale competitive evolution strategy game."
+run/main_scene="res://scenes/debug/smoke_test.tscn"
 config/features=PackedStringArray("4.3", "Mobile")
 
 [autoload]
@@ -28,14 +29,25 @@ gdscript/warnings/unsafe_method_access=1
 gdscript/warnings/unsafe_cast=1
 gdscript/warnings/unsafe_call_argument=1
 
+[display]
+
+window/size/viewport_width=720
+window/size/viewport_height=1280
+window/stretch/mode="canvas_items"
+window/stretch/aspect="expand"
+window/handheld/orientation=1
+
+[input_devices]
+
+pointing/emulate_touch_from_mouse=true
+
 [rendering]
 
 renderer/rendering_method="mobile"
 textures/vram_compression/import_etc2_astc=true
-viewport/transparent_background=true
 
 [xr]
 
-openxr/enabled=true
+openxr/enabled=false
 openxr/environment_blend_mode=2
 shaders/enabled=true
