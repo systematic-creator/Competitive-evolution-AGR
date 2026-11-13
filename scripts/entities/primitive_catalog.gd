@@ -12,6 +12,7 @@ const BUILDING_SIZES: Dictionary = {
 	&"barracks": Vector3(0.07, 0.05, 0.07),
 	&"foundry": Vector3(0.07, 0.055, 0.06),
 	&"extractor": Vector3(0.04, 0.06, 0.04),
+	&"outpost": Vector3(0.04, 0.08, 0.04),
 }
 
 const ERA_TINTS: Array[Color] = [

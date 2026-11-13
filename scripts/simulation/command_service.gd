@@ -33,3 +33,15 @@ func advance_era(faction_id: StringName) -> bool:
 	if world == null:
 		return false
 	return world.try_advance_era(faction_id)
+
+
+func start_skirmish(faction_id: StringName, node_id: StringName, hex: Vector2i, auto_battle: bool = true) -> int:
+	if world == null:
+		return -1
+	return world.start_skirmish(faction_id, node_id, hex, auto_battle)
+
+
+func resolve_skirmish_auto(skirmish_id: int) -> bool:
+	if world == null:
+		return false
+	return world.resolve_skirmish_auto(skirmish_id)

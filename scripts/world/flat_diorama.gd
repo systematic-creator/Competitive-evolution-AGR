@@ -21,6 +21,10 @@ func _ready() -> void:
 	grid = BuildGrid.new()
 	grid.name = "BuildGrid"
 	add_child(grid)
+	grid.visible = false
+	var hex_overlay := HexOverlay.new()
+	hex_overlay.name = "HexOverlay"
+	add_child(hex_overlay)
 	EventBus.world_bootstrapped.connect(_rebuild)
 	EventBus.building_placed.connect(_on_building_placed)
 	EventBus.unit_spawned.connect(_on_unit_spawned)
@@ -163,7 +167,9 @@ func _on_tier(new_tier: int, _prev: int) -> void:
 	var rts: bool = new_tier >= int(GameState.ZoomTier.RTS)
 	_entities.visible = rts
 	_nodes_root.visible = region_or_closer
-	grid.visible = rts
+	# Square cell grid stays hidden; the faint hex overlay is shown only in
+	# Tier 3 build/claim mode (HexOverlay listens for those signals itself).
+	grid.visible = false
 
 
 func _player_can_see(node: SimResourceNode) -> bool:

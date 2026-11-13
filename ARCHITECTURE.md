@@ -86,3 +86,14 @@ res://
   * **Sylvari**: slow expansion; common nodes on owned territory regenerate; defense grows with hold time. Does not regrow rares.
   * **Kraal**: cheap numerous units, faster harvest that also depletes nodes faster, slower eras.
   * **Cogforged**: clockwork → steamworks → assembly → synthetics; high industry; durable constructed units; slow population; can build extractors that boost revealed rare-node yield.
+
+## 8. Hex claims, the escalation ladder, and skirmishes
+* `HexGrid` (axial `q, r`, flat-top) is the sim-side source of truth for territory, borders, and resource areas. The square cell grid is still used to place buildings.
+* **Structures claim, units occupy.** Town centers, outposts, extractors, and other constructed buildings radiate claims (see `SimCatalog.building_territory_radius`). Units occupy the hex they stand in: they provide presence, can block an enemy structure from claiming that hex, and are required to start a skirmish. Occupation never grants yield.
+* Each rare node covers a radius-1 cluster (7 hexes). Yield is split by the share of *claimed* hexes. Full control (every cluster hex claimed by one faction) grants the whole yield. Destroying or capturing the radiating structure releases its claims.
+* Escalation on contested rares is a ladder, not instant war:
+  1. **Borders / soft claim:** a node whose center hex lies in a faction's structure territory is soft-claimed.
+  2. **Outposts / hard claim:** an outpost on or near a visible rare hard-claims it and extends borders (radius 2).
+  3. **Skirmishes:** limited squad fights over a specific hex. The player may auto-battle (resolved by the sim) or request Tier 4 possession (hook is stubbed; `resolve_skirmish_auto` still settles it). A won auto-battle on a structure's hex captures that structure and transfers its claims.
+* FactionAI picks the next step with `node_value × personality`: Kraal aggressive, Sylvari defensive, Cogforged methodical.
+* The faint hex overlay (borders from hex ownership) is shown only in Tier 3 build/claim mode.

@@ -16,6 +16,7 @@ const QUARRY: StringName = &"quarry"
 const BARRACKS: StringName = &"barracks"
 const FOUNDRY: StringName = &"foundry"
 const EXTRACTOR: StringName = &"extractor"
+const OUTPOST: StringName = &"outpost"
 
 const WORKER: StringName = &"worker"
 const SOLDIER: StringName = &"soldier"
@@ -53,7 +54,7 @@ static func is_rare_resource(resource_id: StringName) -> bool:
 
 static func all_building_types() -> Array[StringName]:
 	var ids: Array[StringName] = [
-		TOWN_CENTER, HOUSE, FARM, LUMBER_CAMP, QUARRY, BARRACKS, FOUNDRY, EXTRACTOR
+		TOWN_CENTER, HOUSE, FARM, LUMBER_CAMP, QUARRY, BARRACKS, FOUNDRY, EXTRACTOR, OUTPOST
 	]
 	return ids
 

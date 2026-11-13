@@ -77,3 +77,52 @@ signal unit_possessed(unit: Node3D)
 ## The player released the possessed unit (return to RTS tier).
 @warning_ignore("unused_signal")
 signal unit_released()
+
+# --- Claims / skirmishes ----------------------------------------------------
+
+## A rare node was soft-claimed (territory) or hard-claimed (outpost).
+## `kind` is `&"soft"` or `&"hard"`.
+@warning_ignore("unused_signal")
+signal node_claimed(faction_id: StringName, node_id: StringName, kind: StringName)
+
+## A claim on a rare node was lost (`kind` is `&"soft"` or `&"hard"`).
+@warning_ignore("unused_signal")
+signal node_claim_lost(faction_id: StringName, node_id: StringName, kind: StringName)
+
+## A structure finished radiating a hard claim onto a rare node.
+@warning_ignore("unused_signal")
+signal outpost_established(faction_id: StringName, building_id: int, node_id: StringName, grid_pos: Vector2i)
+
+## A faction's structure claimed a hex (axial q, r packed as Vector2i).
+@warning_ignore("unused_signal")
+signal hex_claimed(faction_id: StringName, hex: Vector2i, building_id: int)
+
+## A structure's claim on a hex was released (destroyed, captured, or blocked).
+@warning_ignore("unused_signal")
+signal hex_claim_released(faction_id: StringName, hex: Vector2i, building_id: int)
+
+## A structure changed owners after a skirmish.
+@warning_ignore("unused_signal")
+signal structure_captured(building_id: int, previous_faction_id: StringName, new_faction_id: StringName)
+
+## A structure was destroyed and its hex claims released.
+@warning_ignore("unused_signal")
+signal structure_destroyed(building_id: int, faction_id: StringName, building_type: StringName, grid_pos: Vector2i)
+
+## A skirmish began over a specific hex in a rare-node cluster.
+@warning_ignore("unused_signal")
+signal skirmish_started(skirmish_id: int, attacker_id: StringName, defender_id: StringName, node_id: StringName, hex: Vector2i)
+
+## Auto-battle finished (or a pending possession skirmish was resolved).
+@warning_ignore("unused_signal")
+signal skirmish_resolved(skirmish_id: int, winner_id: StringName, loser_id: StringName, node_id: StringName, hex: Vector2i, captured_building_id: int, flipped: bool)
+
+## Player chose Tier 4 possession over auto-battle. Combat itself is stubbed;
+## call `CommandService.resolve_skirmish_auto` to resolve by the sim.
+@warning_ignore("unused_signal")
+signal skirmish_possession_requested(skirmish_id: int, faction_id: StringName, node_id: StringName, hex: Vector2i)
+
+## Desktop HUD entered or left build/claim mode (hex overlay visibility).
+@warning_ignore("unused_signal")
+signal build_mode_changed(active: bool)
+

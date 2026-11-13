@@ -12,6 +12,13 @@ var buildings: Dictionary = {}
 var units: Dictionary = {}
 var nodes: Dictionary = {}
 var next_id: int = 1
+## Axial hex source of truth for territory, borders, and resource areas.
+var hex_grid: HexGrid
+var hex_claims: Dictionary = {}
+var hex_claim_building: Dictionary = {}
+var hex_hold_ticks: Dictionary = {}
+## packed axial -> Array of unit ids occupying that hex
+var hex_occupants: Dictionary = {}
 
 
 func region_id() -> StringName:
@@ -63,10 +70,14 @@ func is_water_adjacent(cell: Vector2i) -> bool:
 
 
 func owner_at(cell: Vector2i) -> StringName:
+	if hex_grid != null:
+		return hex_owner_at_world(cell_to_world(cell))
 	return owners.get(pack_cell(cell), &"") as StringName
 
 
 func hold_ticks_at(cell: Vector2i) -> int:
+	if hex_grid != null:
+		return hex_hold_ticks_at_world(cell_to_world(cell))
 	return int(hold_ticks.get(pack_cell(cell), 0))
 
 
@@ -177,6 +188,9 @@ func population_cap(faction_id: StringName) -> int:
 
 
 func setup_tiles() -> void:
+	hex_grid = HexGrid.new()
+	hex_grid.hex_size = data.cell_size
+	hex_grid.origin = Vector3.ZERO
 	tiles.resize(data.grid_size.x * data.grid_size.y)
 	tiles.fill(SimIds.TILE_LAND)
 	# Deterministic river running west -> east through the southern mid-belt.
@@ -231,3 +245,55 @@ func refresh_territory() -> void:
 			next_holds[key] = 1
 	owners = next_owners
 	hold_ticks = next_holds
+
+
+func hex_at_world(pos: Vector3) -> Vector2i:
+	if hex_grid == null:
+		return Vector2i.ZERO
+	return hex_grid.world_to_axial(pos)
+
+
+func hex_at_cell(cell: Vector2i) -> Vector2i:
+	return hex_at_world(cell_to_world(cell))
+
+
+func hex_owner(hex: Vector2i) -> StringName:
+	return hex_claims.get(HexGrid.pack(hex), &"") as StringName
+
+
+func hex_owner_at_world(pos: Vector3) -> StringName:
+	return hex_owner(hex_at_world(pos))
+
+
+func hex_hold_ticks_at_world(pos: Vector3) -> int:
+	return int(hex_hold_ticks.get(HexGrid.pack(hex_at_world(pos)), 0))
+
+
+func is_hex_occupied_by_enemy(hex: Vector2i, faction_id: StringName) -> bool:
+	for unit: SimUnit in units_occupying(hex):
+		if unit.faction_id != faction_id:
+			return true
+	return false
+
+
+func units_occupying(hex: Vector2i) -> Array[SimUnit]:
+	var out: Array[SimUnit] = []
+	var ids: Variant = hex_occupants.get(HexGrid.pack(hex), [])
+	for unit_id in ids:
+		var unit: SimUnit = get_unit(int(unit_id))
+		if unit != null:
+			out.append(unit)
+	return out
+
+
+func structure_on_hex(hex: Vector2i) -> SimBuilding:
+	for building: SimBuilding in buildings.values():
+		if not building.constructed:
+			continue
+		if hex_at_cell(building.grid_pos) == hex:
+			return building
+	return null
+
+
+func remove_building(building_id: int) -> void:
+	buildings.erase(building_id)

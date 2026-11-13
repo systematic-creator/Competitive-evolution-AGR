@@ -27,6 +27,8 @@ var tick_interval: float = DEFAULT_TICK_INTERVAL
 var tick_count: int = 0
 var is_simulation_running: bool = false
 var ai_enabled: bool = true
+## When true and the zoom tier is RTS, the faint hex overlay is shown.
+var build_or_claim_mode: bool = false
 
 ## Authoritative concept simulation. Null until `bootstrap_concept_world()`.
 var world: SimWorld
@@ -57,6 +59,13 @@ func set_zoom_tier(new_tier: ZoomTier) -> void:
 	var previous_tier: ZoomTier = _current_zoom_tier
 	_current_zoom_tier = new_tier
 	EventBus.zoom_tier_changed.emit(int(new_tier), int(previous_tier))
+
+
+func set_build_or_claim_mode(active: bool) -> void:
+	if build_or_claim_mode == active:
+		return
+	build_or_claim_mode = active
+	EventBus.build_mode_changed.emit(active)
 
 
 func start_simulation() -> void:
@@ -114,6 +123,7 @@ func reset() -> void:
 	world = null
 	commands = null
 	ai_enabled = true
+	set_build_or_claim_mode(false)
 
 
 func _on_region_selected(region_id: StringName) -> void:

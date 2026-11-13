@@ -20,6 +20,7 @@ func act(world: SimWorld, faction: SimFaction, tick: int) -> void:
 	_assign_idle_workers(world, faction, region, species)
 	if species != null and species.can_build_extractors:
 		_consider_extractor(world, faction, region, species)
+	_consider_escalation(world, faction, region, species)
 	# Era first when the personality heavily favors it and the cost is payable.
 	if species != null and species.ai_era_weight >= 1.2:
 		if world.upgrades.can_advance_era(world, faction):
@@ -279,3 +280,105 @@ func _rare_contest_point(world: SimWorld, region: SimRegion, faction_id: StringN
 	if best != null:
 		return best.position
 	return Vector3.ZERO
+
+
+func _consider_escalation(world: SimWorld, faction: SimFaction, region: SimRegion, species: SpeciesData) -> void:
+	var fid: StringName = faction.faction_id()
+	for node: SimResourceNode in region.nodes.values():
+		if not node.is_rare() or node.remaining <= 0 or not world.can_see_node(fid, node):
+			continue
+		var choice: StringName = choose_escalation(world, faction, node)
+		if choice == &"outpost":
+			if not faction.can_afford(SimCatalog.building_cost(SimIds.OUTPOST)):
+				continue
+			var cell: Vector2i = _pick_outpost_cell(world, region, fid, node)
+			if cell.x >= 0:
+				world.place_building(fid, SimIds.OUTPOST, cell)
+				return
+		elif choice == &"skirmish":
+			_move_soldiers_to_hex(world, faction, region, node.hex)
+			world.claims.refresh_occupation(region)
+			var sid: int = world.start_skirmish(fid, node.node_id, node.hex, true)
+			if sid >= 0:
+				return
+
+
+func choose_escalation(world: SimWorld, faction: SimFaction, node: SimResourceNode) -> StringName:
+	if node == null or faction == null or not world.can_see_node(faction.faction_id(), node):
+		return &"none"
+	var species: SpeciesData = faction.species
+	var style: StringName = &"balanced" if species == null else species.ai_escalation_style
+	var value: float = world.claims.node_value(node, species)
+	var fid: StringName = faction.faction_id()
+	var hard: StringName = node.hard_claimer
+	var soft: StringName = node.soft_claimer
+	if hard == fid:
+		return &"hold"
+	if hard != &"" and hard != fid:
+		var skirmish_bias: float = 1.0
+		match style:
+			&"aggressive":
+				skirmish_bias = 1.45
+			&"defensive":
+				skirmish_bias = 0.4
+			&"methodical":
+				skirmish_bias = 0.75
+			_:
+				skirmish_bias = 1.0
+		if style == &"methodical" and not _is_prepared(world, faction):
+			return &"none"
+		if style == &"defensive" and soft != fid and value * skirmish_bias < 2.0:
+			return &"none"
+		if value * skirmish_bias >= 1.0:
+			return &"skirmish"
+		return &"none"
+	if soft == fid:
+		var outpost_bias: float = 1.0
+		match style:
+			&"aggressive":
+				outpost_bias = 0.9
+			&"defensive":
+				outpost_bias = 1.25
+			&"methodical":
+				outpost_bias = 1.35
+			_:
+				outpost_bias = 1.0
+		if value * outpost_bias >= 0.8:
+			return &"outpost"
+		return &"hold"
+	# Unclaimed or enemy soft-claim only: climb the ladder from borders.
+	if style == &"defensive":
+		return &"borders"
+	if style == &"methodical" or style == &"aggressive" or style == &"balanced":
+		return &"outpost"
+	return &"borders"
+
+
+func _is_prepared(world: SimWorld, faction: SimFaction) -> bool:
+	var region: SimRegion = world.playable
+	var fid: StringName = faction.faction_id()
+	var soldiers: int = 0
+	for unit: SimUnit in region.units_for(fid):
+		if SimCatalog.is_military(unit.unit_type):
+			soldiers += 1
+	if soldiers >= 2:
+		return true
+	return region.completed_count(fid, SimIds.BARRACKS) >= 1 or region.completed_count(fid, SimIds.FOUNDRY) >= 1
+
+
+func _pick_outpost_cell(world: SimWorld, region: SimRegion, faction_id: StringName, node: SimResourceNode) -> Vector2i:
+	if region.can_place(node.cell, SimIds.OUTPOST, false) and world.claims.is_near_visible_rare(world, faction_id, node.cell):
+		return node.cell
+	for offset: Vector2i in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1), Vector2i(1, 1), Vector2i(-1, 1), Vector2i(1, -1), Vector2i(-1, -1)]:
+		var cell: Vector2i = node.cell + offset
+		if region.can_place(cell, SimIds.OUTPOST, false) and world.claims.is_near_visible_rare(world, faction_id, cell):
+			return cell
+	return Vector2i(-1, -1)
+
+
+func _move_soldiers_to_hex(world: SimWorld, faction: SimFaction, region: SimRegion, hex: Vector2i) -> void:
+	var dest: Vector3 = region.hex_grid.axial_to_world(hex)
+	for unit: SimUnit in region.units_for(faction.faction_id()):
+		if not SimCatalog.is_military(unit.unit_type):
+			continue
+		world.order_move(unit.id, dest)

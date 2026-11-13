@@ -10,6 +10,7 @@ var player_faction_id: StringName = SimIds.PLAYER_FACTION
 var ticks: ResourceTick = ResourceTick.new()
 var upgrades: BuildingUpgradeSystem = BuildingUpgradeSystem.new()
 var ai: FactionAI = FactionAI.new()
+var claims: ClaimSystem = ClaimSystem.new()
 var node_layouts: Array[RegionNodeLayout] = []
 
 ## Starting town centers: SW Humans, NW Sylvari, NE Kraal, SE Cogforged.
@@ -30,7 +31,7 @@ func bootstrap_default() -> void:
 	_bootstrap_playable()
 	_place_starting_pieces()
 	_place_nodes()
-	playable.refresh_territory()
+	claims.update(self)
 
 
 func _bootstrap_factions() -> void:
@@ -113,6 +114,7 @@ func _place_nodes() -> void:
 		node.data = placement.node_type
 		node.cell = placement.cell
 		node.position = playable.cell_to_world(placement.cell)
+		node.hex = playable.hex_at_world(node.position)
 		node.capacity = placement.node_type.capacity
 		node.remaining = placement.node_type.capacity
 		playable.add_node(node)
@@ -180,9 +182,11 @@ func get_region_data(region_id: StringName) -> RegionData:
 
 func step(tick: int, ai_enabled: bool = true) -> void:
 	upgrades.progress_construction(self)
+	claims.update(self)
 	upgrades.progress_training(self)
 	ticks.apply(self)
 	_move_units()
+	claims.refresh_occupation(playable)
 	if ai_enabled:
 		for faction_id: StringName in faction_ids():
 			var faction: SimFaction = get_faction(faction_id)
@@ -216,6 +220,9 @@ func place_building(faction_id: StringName, building_type: StringName, cell: Vec
 		if faction.species == null or not faction.species.can_build_extractors:
 			return -1
 		if not _cell_adjacent_to_visible_rare(faction_id, cell):
+			return -1
+	if building_type == SimIds.OUTPOST:
+		if not claims.is_near_visible_rare(self, faction_id, cell):
 			return -1
 	if not playable.can_place(cell, building_type, false):
 		return -1
@@ -373,3 +380,40 @@ func _cell_adjacent_to_visible_rare(faction_id: StringName, cell: Vector2i) -> b
 		if maxi(abs(cell.x - node.cell.x), abs(cell.y - node.cell.y)) == 1:
 			return true
 	return false
+
+
+func start_skirmish(faction_id: StringName, node_id: StringName, hex: Vector2i, auto_battle: bool = true) -> int:
+	return claims.start_skirmish(self, faction_id, node_id, hex, auto_battle)
+
+
+func resolve_skirmish_auto(skirmish_id: int) -> bool:
+	return claims.resolve_auto_battle(self, skirmish_id)
+
+
+func capture_building(building_id: int, new_faction_id: StringName) -> bool:
+	if playable == null:
+		return false
+	var building: SimBuilding = playable.get_building(building_id)
+	var new_faction: SimFaction = get_faction(new_faction_id)
+	if building == null or new_faction == null or building.faction_id == new_faction_id:
+		return false
+	var previous: StringName = building.faction_id
+	building.faction_id = new_faction_id
+	EventBus.structure_captured.emit(building.id, previous, new_faction_id)
+	claims.update(self)
+	return true
+
+
+func destroy_building(building_id: int) -> bool:
+	if playable == null:
+		return false
+	var building: SimBuilding = playable.get_building(building_id)
+	if building == null or building.building_type == SimIds.TOWN_CENTER:
+		return false
+	var faction_id: StringName = building.faction_id
+	var building_type: StringName = building.building_type
+	var cell: Vector2i = building.grid_pos
+	playable.remove_building(building_id)
+	EventBus.structure_destroyed.emit(building_id, faction_id, building_type, cell)
+	claims.update(self)
+	return true

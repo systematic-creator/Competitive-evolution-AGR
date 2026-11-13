@@ -11,7 +11,7 @@ This repository also includes a **desktop concept build**: a full orbit globe, o
 3. Press Play.
     - **Scroll** to move between Orbit / Region / RTS distances (1.2m / 0.9m / 0.55m / 0.20m).
     - **Click a glowing region pin** on the globe to enter the Verdant Basin (the only accessible region in this concept).
-    - **Left-click** a unit to select, **right-click** the ground to move. HUD buttons train units and enter build mode; left-click a grid cell to place.
+    - **Left-click** a unit to select, **right-click** the ground to move. HUD buttons train units and enter build/claim mode (the faint hex overlay appears in the RTS tier); left-click a cell to place. Outposts hard-claim revealed rare nodes. Auto-Battle resolves a hex skirmish in the sim; Contest (possess) stubs Tier 4 control.
     - **P** possesses a selected unit (Tier 4). **WASD** moves it. **P** or **Esc** releases.
     - **Space** pauses or resumes the simulation.
 

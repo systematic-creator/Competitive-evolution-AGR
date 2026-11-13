@@ -43,3 +43,4 @@ node_depletion_multiplier = 1.0
 can_build_extractors = true
 extractor_rare_yield_bonus = 0.75
 ai_rare_weight = 1.65
+ai_escalation_style = &"methodical"

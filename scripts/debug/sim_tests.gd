@@ -18,6 +18,10 @@ func _run() -> void:
 	_test_rare_cost_gating()
 	_test_era_gated_reveal()
 	_test_extractor_gate()
+	_test_hex_grid_and_yield_split()
+	_test_escalation_ladder_and_skirmish()
+	_test_occupy_blocks_claim_and_destroy()
+	_test_ai_escalation_personality()
 	print("%d passed, %d failed" % [_passed, _failed])
 	var code: int = 1 if _failed > 0 else 0
 	if DisplayServer.get_name() == "headless":
@@ -370,3 +374,227 @@ func _place_near(commands: CommandService, world: SimWorld, faction_id: StringNa
 				if building_id >= 0:
 					return building_id
 	return -1
+
+
+func _test_hex_grid_and_yield_split() -> void:
+	_boot()
+	var world: SimWorld = GameState.world
+	var region: SimRegion = world.playable
+	var grid: HexGrid = region.hex_grid
+	_check("playable region has an axial HexGrid", grid != null)
+	var identity_ok: bool = true
+	for q: int in range(-4, 5):
+		for r: int in range(-4, 5):
+			var hex := Vector2i(q, r)
+			if grid.world_to_axial(grid.axial_to_world(hex)) != hex:
+				identity_ok = false
+	_check("axial world conversion round-trips", identity_ok)
+	_check("hex distance from a hex to itself is 0", grid.distance(Vector2i.ZERO, Vector2i.ZERO) == 0)
+	_check("a radius-1 cluster has 7 hexes", grid.hexes_in_radius(Vector2i.ZERO, 1).size() == 7)
+	var iron: SimResourceNode = _first_node(world, true, SimIds.IRON)
+	_check("rare iron node sits on an axial hex", iron != null and iron.hex == region.hex_at_world(iron.position))
+	var cluster: Array[Vector2i] = world.claims.cluster_hexes(region, iron)
+	_check("each rare node covers a 7-hex cluster", cluster.size() == 7)
+	# Yield share counts CLAIMED hexes only (not occupation).
+	for i: int in cluster.size():
+		var key: int = HexGrid.pack(cluster[i])
+		if i < 3:
+			region.hex_claims[key] = SimIds.PLAYER_FACTION
+		else:
+			region.hex_claims[key] = &"kraal"
+	_check("yield split is 3/7 and 4/7 by claimed hexes", (
+		world.claims.yield_for(region, iron, SimIds.PLAYER_FACTION, 7) == 3
+		and world.claims.yield_for(region, iron, &"kraal", 7) == 4
+		and world.claims.yield_for(region, iron, &"sylvari", 7) == 0
+	))
+	_check("partial claim is not full control", not world.claims.has_full_control(region, iron, SimIds.PLAYER_FACTION))
+	for hex: Vector2i in cluster:
+		region.hex_claims[HexGrid.pack(hex)] = SimIds.PLAYER_FACTION
+	_check("full control of the cluster yields the whole amount", (
+		world.claims.has_full_control(region, iron, SimIds.PLAYER_FACTION)
+		and world.claims.yield_for(region, iron, SimIds.PLAYER_FACTION, 10) == 10
+	))
+
+
+func _test_escalation_ladder_and_skirmish() -> void:
+	_boot()
+	var world: SimWorld = GameState.world
+	var region: SimRegion = world.playable
+	var commands: CommandService = GameState.commands
+	var iron: SimResourceNode = _first_node(world, true, SimIds.IRON)
+	_check("contested rare starts unclaimed", iron != null and iron.soft_claimer == &"" and iron.hard_claimer == &"")
+	world.set_faction_era(SimIds.PLAYER_FACTION, 2)
+	world.set_faction_era(&"kraal", 2)
+	var soft_events: Array[StringName] = []
+	var hard_events: Array[StringName] = []
+	var on_claimed := func(fid: StringName, node_id: StringName, kind: StringName) -> void:
+		if node_id != iron.node_id:
+			return
+		if kind == &"soft":
+			soft_events.append(fid)
+		elif kind == &"hard":
+			hard_events.append(fid)
+	EventBus.node_claimed.connect(on_claimed)
+	# Place the farm at hex distance 2 so it soft-claims the center without
+	# out-radiating an outpost that sits on the node after a later capture.
+	var farm_cell: Vector2i = _structure_cell_at_distance(world, iron.hex, 2)
+	world.get_faction(SimIds.PLAYER_FACTION).set_resource(SimIds.WOOD, 80)
+	world.get_faction(SimIds.PLAYER_FACTION).set_resource(SimIds.STONE, 80)
+	var farm_id: int = commands.place_building(SimIds.PLAYER_FACTION, SimIds.FARM, farm_cell)
+	_check("border structure can be placed to soft-claim a rare node", farm_id >= 0)
+	GameState.step_ticks(4)
+	_check("node inside structure territory is soft-claimed", iron.soft_claimer == SimIds.PLAYER_FACTION)
+	_check("soft-claim emits node_claimed", soft_events.has(SimIds.PLAYER_FACTION))
+	var outpost_cell: Vector2i = iron.cell
+	if not world.playable.can_place(outpost_cell, SimIds.OUTPOST, false):
+		outpost_cell = _structure_cell_at_distance(world, iron.hex, 0)
+	if outpost_cell.x < 0:
+		outpost_cell = _structure_cell_at_distance(world, iron.hex, 1)
+	var outpost_id: int = commands.place_building(SimIds.PLAYER_FACTION, SimIds.OUTPOST, outpost_cell)
+	_check("outpost can be placed on or near a visible rare node", outpost_id >= 0)
+	GameState.step_ticks(5)
+	var outpost: SimBuilding = region.get_building(outpost_id)
+	_check("outpost completes and hard-claims the node", (
+		outpost != null and outpost.constructed
+		and iron.hard_claimer == SimIds.PLAYER_FACTION
+		and iron.claimed_outpost_id == outpost_id
+	))
+	_check("hard-claim emits node_claimed", hard_events.has(SimIds.PLAYER_FACTION))
+	_check("outpost claim radiates over the whole rare cluster", world.claims.has_full_control(region, iron, SimIds.PLAYER_FACTION))
+	EventBus.node_claimed.disconnect(on_claimed)
+	var outpost_hex: Vector2i = region.hex_at_cell(outpost.grid_pos)
+	_check("skirmish is rejected without an occupying military unit", (
+		commands.start_skirmish(&"kraal", iron.node_id, outpost_hex, true) < 0
+	))
+	# Possession stub: occupy the outpost hex, request possess, do not resolve yet.
+	var soldier: SimUnit = world._spawn_unit(&"kraal", SimIds.SOLDIER, region.hex_grid.axial_to_world(outpost_hex))
+	soldier.position = region.hex_grid.axial_to_world(outpost_hex)
+	world.claims.refresh_occupation(region)
+	var possess_ids: Array[int] = []
+	var on_possess := func(sid: int, _fid: StringName, _nid: StringName, _hex: Vector2i) -> void:
+		possess_ids.append(sid)
+	EventBus.skirmish_possession_requested.connect(on_possess)
+	var pending_id: int = commands.start_skirmish(&"kraal", iron.node_id, outpost_hex, false)
+	_check("possession hook starts a pending skirmish without auto-resolving", pending_id >= 0 and possess_ids.has(pending_id))
+	_check("possession stub does not flip the outpost", outpost.faction_id == SimIds.PLAYER_FACTION)
+	EventBus.skirmish_possession_requested.disconnect(on_possess)
+	# Auto-battle (and resolving a pending possess skirmish) flips the structure and its claims.
+	var flipped: Array[bool] = []
+	var on_resolved := func(_sid: int, _w: StringName, _l: StringName, _nid: StringName, _hex: Vector2i, cap: int, did_flip: bool) -> void:
+		flipped.append(did_flip and cap == outpost_id)
+	EventBus.skirmish_resolved.connect(on_resolved)
+	_check("auto-battle resolves the pending skirmish", commands.resolve_skirmish_auto(pending_id))
+	EventBus.skirmish_resolved.disconnect(on_resolved)
+	_check("lost skirmish flips the outpost to the attacker", outpost.faction_id == &"kraal")
+	_check("capturing the outpost transfers hex claims and full control", (
+		iron.hard_claimer == &"kraal"
+		and world.claims.has_full_control(region, iron, &"kraal")
+		and not world.claims.has_full_control(region, iron, SimIds.PLAYER_FACTION)
+	))
+	_check("skirmish_resolved reports the structure flip", flipped.has(true))
+
+
+func _test_occupy_blocks_claim_and_destroy() -> void:
+	_boot()
+	var world: SimWorld = GameState.world
+	var region: SimRegion = world.playable
+	var iron: SimResourceNode = _first_node(world, true, SimIds.IRON)
+	world.set_faction_era(SimIds.PLAYER_FACTION, 2)
+	# An enemy unit occupying a cluster hex blocks the radiating claim.
+	var blocked: Vector2i = iron.hex
+	var blocker: SimUnit = world._spawn_unit(&"kraal", SimIds.SOLDIER, region.hex_grid.axial_to_world(blocked))
+	blocker.position = region.hex_grid.axial_to_world(blocked)
+	world.get_faction(SimIds.PLAYER_FACTION).set_resource(SimIds.WOOD, 80)
+	world.get_faction(SimIds.PLAYER_FACTION).set_resource(SimIds.STONE, 80)
+	var cell: Vector2i = iron.cell
+	if not region.can_place(cell, SimIds.OUTPOST, false):
+		cell = _structure_cell_for_hex(world, iron.hex, 1, iron.cell)
+	var outpost_id: int = world.place_building(SimIds.PLAYER_FACTION, SimIds.OUTPOST, cell)
+	_check("outpost places beside a rare node for the occupy test", outpost_id >= 0)
+	GameState.step_ticks(5)
+	_check("enemy occupation blocks claiming that hex", region.hex_owner(blocked) != SimIds.PLAYER_FACTION)
+	_check("yield share ignores occupied unclaimed hexes", (
+		world.claims.claimed_hex_count(region, iron, SimIds.PLAYER_FACTION) < 7
+		and not world.claims.has_full_control(region, iron, SimIds.PLAYER_FACTION)
+	))
+	# Remove the blocker and the outpost should radiate over the hex.
+	blocker.hp = 0
+	world.claims.update(world)
+	_check("claim radiates once the occupying enemy is gone", region.hex_owner(blocked) == SimIds.PLAYER_FACTION)
+	_check("outpost then has full control of the cluster", world.claims.has_full_control(region, iron, SimIds.PLAYER_FACTION))
+	_check("destroying the outpost releases its hex claims", world.destroy_building(outpost_id))
+	_check("no full control remains after the structure is destroyed", (
+		not world.claims.has_full_control(region, iron, SimIds.PLAYER_FACTION)
+		and iron.hard_claimer == &""
+	))
+
+
+func _test_ai_escalation_personality() -> void:
+	_boot()
+	var world: SimWorld = GameState.world
+	var iron: SimResourceNode = _first_node(world, true, SimIds.IRON)
+	world.set_faction_era(&"kraal", 2)
+	world.set_faction_era(&"sylvari", 2)
+	world.set_faction_era(&"cogforged", 2)
+	# Unclaimed visible rare: defensive holds the border, others go for an outpost.
+	_check("Sylvari (defensive) escalate unclaimed rares via borders", (
+		world.ai.choose_escalation(world, world.get_faction(&"sylvari"), iron) == &"borders"
+	))
+	_check("Kraal (aggressive) escalate unclaimed rares to an outpost", (
+		world.ai.choose_escalation(world, world.get_faction(&"kraal"), iron) == &"outpost"
+	))
+	_check("Cogforged (methodical) escalate unclaimed rares to an outpost", (
+		world.ai.choose_escalation(world, world.get_faction(&"cogforged"), iron) == &"outpost"
+	))
+	# Enemy hard-claim: aggressive skirmishes; defensive holds unless already soft-claiming;
+	# methodical waits until prepared.
+	iron.hard_claimer = SimIds.PLAYER_FACTION
+	iron.soft_claimer = SimIds.PLAYER_FACTION
+	_check("Kraal (aggressive) skirmish over an enemy hard-claim", (
+		world.ai.choose_escalation(world, world.get_faction(&"kraal"), iron) == &"skirmish"
+	))
+	_check("Sylvari (defensive) do not rush an enemy hard-claim", (
+		world.ai.choose_escalation(world, world.get_faction(&"sylvari"), iron) == &"none"
+	))
+	_check("Cogforged (methodical) wait to skirmish until prepared", (
+		world.ai.choose_escalation(world, world.get_faction(&"cogforged"), iron) == &"none"
+	))
+	world._spawn_unit(&"cogforged", SimIds.SOLDIER, iron.position)
+	world._spawn_unit(&"cogforged", SimIds.SOLDIER, iron.position)
+	_check("prepared Cogforged then auto-battles the hard-claim", (
+		world.ai.choose_escalation(world, world.get_faction(&"cogforged"), iron) == &"skirmish"
+	))
+
+
+func _structure_cell_for_hex(world: SimWorld, target_hex: Vector2i, max_hex_dist: int, prefer: Vector2i) -> Vector2i:
+	var region: SimRegion = world.playable
+	if prefer.x >= 0 and region.can_place(prefer, SimIds.FARM, false):
+		if region.hex_grid.distance(region.hex_at_cell(prefer), target_hex) <= max_hex_dist:
+			return prefer
+	var size: Vector2i = region.grid_size()
+	var best := Vector2i(-1, -1)
+	var best_d: int = 99
+	for x: int in size.x:
+		for y: int in size.y:
+			var cell := Vector2i(x, y)
+			if not region.can_place(cell, SimIds.FARM, false):
+				continue
+			var dist: int = region.hex_grid.distance(region.hex_at_cell(cell), target_hex)
+			if dist <= max_hex_dist and dist < best_d:
+				best = cell
+				best_d = dist
+	return best
+
+
+
+func _structure_cell_at_distance(world: SimWorld, target_hex: Vector2i, exact_dist: int) -> Vector2i:
+	var region: SimRegion = world.playable
+	var size: Vector2i = region.grid_size()
+	for x: int in size.x:
+		for y: int in size.y:
+			var cell := Vector2i(x, y)
+			if not region.can_place(cell, SimIds.FARM, false):
+				continue
+			if region.hex_grid.distance(region.hex_at_cell(cell), target_hex) == exact_dist:
+				return cell
+	return Vector2i(-1, -1)

@@ -24,13 +24,16 @@ func _ready() -> void:
 	var buttons := HBoxContainer.new()
 	buttons.add_theme_constant_override("separation", 8)
 	col.add_child(buttons)
-	_add_btn(buttons, "Farm", func() -> void: _build_type = SimIds.FARM)
-	_add_btn(buttons, "House", func() -> void: _build_type = SimIds.HOUSE)
-	_add_btn(buttons, "Lumber", func() -> void: _build_type = SimIds.LUMBER_CAMP)
-	_add_btn(buttons, "Quarry", func() -> void: _build_type = SimIds.QUARRY)
-	_add_btn(buttons, "Barracks", func() -> void: _build_type = SimIds.BARRACKS)
-	_add_btn(buttons, "Foundry", func() -> void: _build_type = SimIds.FOUNDRY)
-	_add_btn(buttons, "Extractor", func() -> void: _build_type = SimIds.EXTRACTOR)
+	_add_btn(buttons, "Farm", func() -> void: _select_build(SimIds.FARM))
+	_add_btn(buttons, "House", func() -> void: _select_build(SimIds.HOUSE))
+	_add_btn(buttons, "Lumber", func() -> void: _select_build(SimIds.LUMBER_CAMP))
+	_add_btn(buttons, "Quarry", func() -> void: _select_build(SimIds.QUARRY))
+	_add_btn(buttons, "Barracks", func() -> void: _select_build(SimIds.BARRACKS))
+	_add_btn(buttons, "Foundry", func() -> void: _select_build(SimIds.FOUNDRY))
+	_add_btn(buttons, "Extractor", func() -> void: _select_build(SimIds.EXTRACTOR))
+	_add_btn(buttons, "Outpost", func() -> void: _select_build(SimIds.OUTPOST))
+	_add_btn(buttons, "Auto-Battle", func() -> void: _auto_battle())
+	_add_btn(buttons, "Contest (possess)", func() -> void: _contest_possess())
 	_add_btn(buttons, "Worker", func() -> void: _train(SimIds.WORKER))
 	_add_btn(buttons, "Soldier", func() -> void: _train(SimIds.SOLDIER))
 	_add_btn(buttons, "Ironclad", func() -> void: _train(SimIds.IRONCLAD))
@@ -51,6 +54,46 @@ func pending_build_type() -> StringName:
 
 func clear_build() -> void:
 	_build_type = &""
+	GameState.set_build_or_claim_mode(false)
+	_refresh()
+
+
+func _select_build(building_type: StringName) -> void:
+	_build_type = building_type
+	GameState.set_build_or_claim_mode(building_type != &"")
+	_refresh()
+
+
+func _auto_battle() -> void:
+	if GameState.world == null or GameState.commands == null:
+		return
+	var target: Dictionary = GameState.world.claims.find_skirmish_target(GameState.world, GameState.get_player_faction_id())
+	if target.is_empty():
+		return
+	GameState.commands.start_skirmish(
+		GameState.get_player_faction_id(),
+		target["node_id"] as StringName,
+		target["hex"] as Vector2i,
+		true
+	)
+	_refresh()
+
+
+func _contest_possess() -> void:
+	if GameState.world == null or GameState.commands == null:
+		return
+	var target: Dictionary = GameState.world.claims.find_skirmish_target(GameState.world, GameState.get_player_faction_id())
+	if target.is_empty():
+		return
+	# Stub: emit the possession hook and enter Tier 4 if a unit exists; do not resolve combat.
+	GameState.commands.start_skirmish(
+		GameState.get_player_faction_id(),
+		target["node_id"] as StringName,
+		target["hex"] as Vector2i,
+		false
+	)
+	EventBus.unit_possessed.emit(null)
+	GameState.current_zoom_tier = GameState.ZoomTier.THIRD_PERSON
 	_refresh()
 
 

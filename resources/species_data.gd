@@ -70,6 +70,9 @@ extends Resource
 @export_range(0.0, 5.0, 0.01) var ai_water_preference: float = 0.0
 ## How strongly the AI values and contests rare (iron / coal) nodes.
 @export_range(0.0, 5.0, 0.01) var ai_rare_weight: float = 1.0
+## Escalation personality: `&"aggressive"` (Kraal), `&"defensive"` (Sylvari),
+## `&"methodical"` (Cogforged), or `&"balanced"` (Humans).
+@export var ai_escalation_style: StringName = &"balanced"
 
 
 func has_trait(trait_id: StringName) -> bool:

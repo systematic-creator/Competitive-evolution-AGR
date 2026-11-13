@@ -50,6 +50,12 @@ func _compute_gather(node: SimResourceNode, faction: SimFaction, region: SimRegi
 	var extractor: float = 1.0 + world.extractor_bonus_for(region, node, faction.faction_id())
 	var raw: float = float(node.base_gather()) * era_mult * gather_mult * harvest * extractor
 	var yield_amount: int = maxi(1, int(round(raw)))
+	# Rare yield is split by claimed-hex share only. Occupying a hex is not enough.
+	if node.is_rare():
+		yield_amount = world.claims.yield_for(region, node, faction.faction_id(), yield_amount)
+		if yield_amount <= 0:
+			var empty: Dictionary = {"yield": 0, "deplete": 0}
+			return empty
 	var depletion: float = 1.0 if species == null else species.node_depletion_multiplier
 	var deplete_amount: int = maxi(yield_amount, int(round(float(yield_amount) * depletion)))
 	if deplete_amount > node.remaining:
@@ -78,7 +84,10 @@ func _extractor_trickle(world: SimWorld, region: SimRegion) -> void:
 			if not _is_adjacent(building.grid_pos, node.cell):
 				continue
 			var amount: int = maxi(1, int(round(1.0 + faction.species.extractor_rare_yield_bonus)))
+			amount = world.claims.yield_for(region, node, building.faction_id, amount)
 			amount = mini(amount, node.remaining)
+			if amount <= 0:
+				continue
 			node.remaining -= amount
 			faction.add_resource(node.resource_id(), amount)
 

@@ -165,6 +165,14 @@ func _take_screenshots() -> void:
 	hud._refresh()
 	await _wait_frames(24)
 	await _save(dir, "03-rts-scale.png")
+	# Tier 3 build/claim mode: faint axial hex overlay and structure-claim borders.
+	rig.distance = 0.62
+	rig._target_distance = 0.62
+	GameState.set_build_or_claim_mode(true)
+	hud._refresh()
+	await _wait_frames(24)
+	await _save(dir, "04-rts-hex-overlay.png")
+	GameState.set_build_or_claim_mode(false)
 	print("SCREENSHOTS_SAVED %s" % dir)
 	get_tree().quit(0)
 

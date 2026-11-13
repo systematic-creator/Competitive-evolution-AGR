@@ -92,6 +92,9 @@ static func building_cost(building_type: StringName) -> Dictionary:
 		SimIds.EXTRACTOR:
 			cost[SimIds.WOOD] = 30
 			cost[SimIds.STONE] = 20
+		SimIds.OUTPOST:
+			cost[SimIds.WOOD] = 35
+			cost[SimIds.STONE] = 25
 		_:
 			pass
 	return cost
@@ -103,7 +106,7 @@ static func building_build_ticks(building_type: StringName) -> int:
 			return 3
 		SimIds.FARM:
 			return 3
-		SimIds.LUMBER_CAMP, SimIds.QUARRY, SimIds.FOUNDRY, SimIds.EXTRACTOR:
+		SimIds.LUMBER_CAMP, SimIds.QUARRY, SimIds.FOUNDRY, SimIds.EXTRACTOR, SimIds.OUTPOST:
 			return 4
 		SimIds.BARRACKS:
 			return 5
@@ -127,6 +130,8 @@ static func building_hp(building_type: StringName) -> int:
 			return 200
 		SimIds.BARRACKS:
 			return 140
+		SimIds.OUTPOST:
+			return 130
 		_:
 			return 100
 
@@ -294,3 +299,31 @@ static func trainer_for(unit_type: StringName, species: SpeciesData = null) -> S
 
 static func uses_only_common_resources(unit_type: StringName) -> bool:
 	return not SimIds.is_specialized_unit(unit_type)
+
+
+static func building_territory_radius(building_type: StringName) -> int:
+	match building_type:
+		SimIds.TOWN_CENTER:
+			return 4
+		SimIds.OUTPOST:
+			return 2
+		SimIds.HOUSE, SimIds.EXTRACTOR:
+			return 1
+		_:
+			return 2
+
+
+static func is_military(unit_type: StringName) -> bool:
+	return unit_type == SimIds.SOLDIER or unit_type == SimIds.IRONCLAD or unit_type == SimIds.STEAMWALKER
+
+
+static func unit_combat_power(unit_type: StringName) -> float:
+	match unit_type:
+		SimIds.SOLDIER:
+			return 1.0
+		SimIds.IRONCLAD:
+			return 1.6
+		SimIds.STEAMWALKER:
+			return 1.8
+		_:
+			return 0.0

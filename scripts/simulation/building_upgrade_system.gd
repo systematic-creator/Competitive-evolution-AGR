@@ -19,7 +19,7 @@ func progress_construction(world: SimWorld) -> void:
 			EventBus.building_constructed.emit(
 				building.faction_id, building.id, building.building_type, building.grid_pos
 			)
-	region.refresh_territory()
+	world.claims.update(world)
 
 
 func progress_training(world: SimWorld) -> void:
