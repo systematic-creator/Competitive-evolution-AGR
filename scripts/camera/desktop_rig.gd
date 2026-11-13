@@ -15,6 +15,11 @@ var _target_distance: float = 1.7
 var auto_zoom_to: float = -1.0
 var third_person: bool = false
 var frozen: bool = false
+## Touch stand-in for the scroll wheel / middle drag (mobile builds only):
+## pinch = distance, one-finger drag = orbit.
+var touch_enabled: bool = OS.has_feature("mobile")
+var _touches: Dictionary = {}
+var _pinch_last: float = -1.0
 
 
 func _ready() -> void:
@@ -30,6 +35,11 @@ func _ready() -> void:
 
 func _unhandled_input(event: InputEvent) -> void:
 	if third_person:
+		_touches.clear()
+		_pinch_last = -1.0
+		return
+	if touch_enabled and (event is InputEventScreenTouch or event is InputEventScreenDrag):
+		_handle_touch(event)
 		return
 	if event is InputEventMouseButton:
 		var mouse: InputEventMouseButton = event
@@ -72,3 +82,33 @@ func _apply_transform() -> void:
 	) * distance
 	camera.position = offset
 	camera.look_at(global_position, Vector3.UP)
+
+
+func _handle_touch(event: InputEvent) -> void:
+	if event is InputEventScreenTouch:
+		var touch: InputEventScreenTouch = event
+		if touch.pressed:
+			_touches[touch.index] = touch.position
+		else:
+			_touches.erase(touch.index)
+		_pinch_last = _pinch_span()
+		return
+	var drag: InputEventScreenDrag = event
+	_touches[drag.index] = drag.position
+	if _touches.size() >= 2:
+		var span: float = _pinch_span()
+		if _pinch_last > 1.0 and span > 1.0:
+			# Fingers apart = move closer (like scrolling in).
+			_target_distance = clampf(_target_distance * (_pinch_last / span), min_distance, max_distance)
+			auto_zoom_to = -1.0
+		_pinch_last = span
+	elif _touches.size() == 1:
+		yaw -= drag.relative.x * 0.006
+		pitch = clampf(pitch + drag.relative.y * 0.006, 0.15, 1.35)
+
+
+func _pinch_span() -> float:
+	if _touches.size() < 2:
+		return -1.0
+	var points: Array = _touches.values()
+	return (points[0] as Vector2).distance_to(points[1] as Vector2)

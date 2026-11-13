@@ -8,6 +8,13 @@ var hud: DesktopHud
 var skirmish: SkirmishPossessionController
 var selected_unit_id: int = -1
 var _possessed_id: int = -1
+## Mobile builds: a short single-finger tap selects a unit, or orders the
+## selected unit to the tapped ground / resource node (no right button on touch).
+var touch_enabled: bool = OS.has_feature("mobile")
+const TAP_SLOP_PX: float = 24.0
+var _touch_count: int = 0
+var _tap_start: Vector2 = Vector2.ZERO
+var _tap_valid: bool = false
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -34,30 +41,74 @@ func _unhandled_input(event: InputEvent) -> void:
 			return
 	if GameState.current_zoom_tier == GameState.ZoomTier.THIRD_PERSON:
 		return
+	if touch_enabled:
+		_handle_touch(event)
+		return
 	if not (event is InputEventMouseButton and event.pressed):
 		return
+	var mouse: InputEventMouseButton = event
+	if mouse.button_index == MOUSE_BUTTON_LEFT:
+		_primary_at(mouse.position, false)
+	elif mouse.button_index == MOUSE_BUTTON_RIGHT:
+		_order_at(mouse.position)
+
+
+## Left click / tap: place a pending building, else select a unit. On touch,
+## tapping empty ground with a unit selected issues the move/gather order.
+func _primary_at(screen: Vector2, is_tap: bool) -> void:
 	if GameState.current_zoom_tier < GameState.ZoomTier.RTS and hud.pending_build_type() == &"":
 		return
-	var mouse: InputEventMouseButton = event
-	var hit: Dictionary = _ray(mouse.position)
+	var hit: Dictionary = _ray(screen)
 	if hit.is_empty():
 		return
 	var point: Vector3 = hit["position"] as Vector3
-	if mouse.button_index == MOUSE_BUTTON_LEFT:
-		if hud != null and hud.pending_build_type() != &"":
-			var cell: Vector2i = GameState.world.playable.world_to_cell(point)
-			GameState.commands.place_building(GameState.get_player_faction_id(), hud.pending_build_type(), cell)
-			hud.clear_build()
-			return
-		var unit: SimUnit = _unit_near(point, GameState.get_player_faction_id())
-		if unit != null:
-			selected_unit_id = unit.id
-	elif mouse.button_index == MOUSE_BUTTON_RIGHT and selected_unit_id >= 0:
-		var node: SimResourceNode = _node_near(point)
-		if node != null:
-			GameState.commands.assign_gather(selected_unit_id, node.node_id)
+	if hud != null and hud.pending_build_type() != &"":
+		var cell: Vector2i = GameState.world.playable.world_to_cell(point)
+		GameState.commands.place_building(GameState.get_player_faction_id(), hud.pending_build_type(), cell)
+		hud.clear_build()
+		return
+	var unit: SimUnit = _unit_near(point, GameState.get_player_faction_id())
+	if unit != null:
+		selected_unit_id = unit.id
+	elif is_tap:
+		_order_at(screen)
+
+
+## Right click (or a touch tap on the ground): move or gather.
+func _order_at(screen: Vector2) -> void:
+	if selected_unit_id < 0 or GameState.current_zoom_tier < GameState.ZoomTier.RTS:
+		return
+	var hit: Dictionary = _ray(screen)
+	if hit.is_empty():
+		return
+	var point: Vector3 = hit["position"] as Vector3
+	var node: SimResourceNode = _node_near(point)
+	if node != null:
+		GameState.commands.assign_gather(selected_unit_id, node.node_id)
+	else:
+		GameState.commands.move_unit(selected_unit_id, Vector3(point.x, 0.0, point.z))
+
+
+func _handle_touch(event: InputEvent) -> void:
+	if event is InputEventScreenTouch:
+		var touch: InputEventScreenTouch = event
+		if touch.pressed:
+			_touch_count += 1
+			if _touch_count == 1:
+				_tap_start = touch.position
+				_tap_valid = true
+			else:
+				_tap_valid = false  # pinch, not a tap
 		else:
-			GameState.commands.move_unit(selected_unit_id, Vector3(point.x, 0.0, point.z))
+			_touch_count = maxi(0, _touch_count - 1)
+			if _tap_valid and _touch_count == 0:
+				_tap_valid = false
+				if hud == null or not hud.is_over_ui(touch.position):
+					_primary_at(touch.position, true)
+	elif event is InputEventScreenDrag:
+		var drag: InputEventScreenDrag = event
+		if drag.position.distance_to(_tap_start) > TAP_SLOP_PX:
+			_tap_valid = false  # orbit drag, not a tap
 
 
 func _process(delta: float) -> void:

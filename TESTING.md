@@ -27,6 +27,23 @@ skirmish is resolved. If nobody can be possessed, the skirmish auto-battles.
 If the editor warns that Vulkan is not supported, switch the renderer to
 **Compatibility** (`--rendering-method gl_compatibility`).
 
+## Android APK (debug, arm64)
+
+`export_presets.cfg` has an **Android** preset (no Gradle build, arm64-v8a,
+Compatibility renderer on mobile, landscape). With the Godot 4.3 export
+templates installed and the Android SDK / debug keystore set in Editor
+Settings:
+
+```bash
+godot --headless --path . --export-debug "Android" build/competitive-evolution-agr.apk
+```
+
+Touch controls (mobile builds only): pinch to zoom between the tiers,
+one-finger drag to orbit, tap a glowing pin to enter the region, tap a unit
+to select it, then tap the ground or a resource node to move / gather. HUD
+buttons work as on desktop; Tier 4 possession uses the on-screen joystick
+and Attack / Auto-resolve buttons.
+
 ## Headless tests
 
 ```bash

@@ -6,6 +6,7 @@ var _status: Label
 var _log: Label
 var _victory: Label
 var _build_type: StringName = &""
+var _buttons: HFlowContainer
 
 
 func _ready() -> void:
@@ -22,8 +23,10 @@ func _ready() -> void:
 	_status = Label.new()
 	_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	col.add_child(_status)
-	var buttons := HBoxContainer.new()
-	buttons.add_theme_constant_override("separation", 8)
+	var buttons := HFlowContainer.new()
+	_buttons = buttons
+	buttons.add_theme_constant_override("h_separation", 8)
+	buttons.add_theme_constant_override("v_separation", 6)
 	col.add_child(buttons)
 	_add_btn(buttons, "Farm", func() -> void: _select_build(SimIds.FARM))
 	_add_btn(buttons, "House", func() -> void: _select_build(SimIds.HOUSE))
@@ -53,6 +56,18 @@ func _ready() -> void:
 	EventBus.victory_progress.connect(func(_a: StringName, _b: StringName, _c: float, _d: int, _e: int) -> void: _refresh())
 	EventBus.victory_achieved.connect(func(_a: StringName, _b: StringName, _c: WinConditionData) -> void: _refresh())
 	_refresh()
+
+
+## True if a screen position lands on a HUD button (so touch taps there are
+## not also treated as taps on the world behind the HUD).
+func is_over_ui(screen_position: Vector2) -> bool:
+	if _buttons == null:
+		return false
+	for child: Node in _buttons.get_children():
+		var control: Control = child as Control
+		if control != null and control.visible and control.get_global_rect().has_point(screen_position):
+			return true
+	return false
 
 
 func show_message(text: String) -> void:
