@@ -25,7 +25,7 @@ func act(world: SimWorld, faction: SimFaction, tick: int) -> void:
 	if species != null and species.ai_era_weight >= 1.2:
 		if world.upgrades.can_advance_era(world, faction):
 			if _roll(species.ai_era_weight, 1.15):
-				world.try_advance_era(faction.faction_id())
+				_request_advance(world, faction.faction_id())
 				return
 	if _want(species, species.ai_expand_weight if species else 1.0, 0.7) or tick % 2 == 0:
 		_consider_buildings(world, faction, region, species)
@@ -34,7 +34,7 @@ func act(world: SimWorld, faction: SimFaction, tick: int) -> void:
 	if _want(species, species.ai_military_weight if species else 1.0, 0.85):
 		_consider_soldiers(world, faction, species)
 	if _want(species, species.ai_era_weight if species else 1.0, 1.0):
-		world.try_advance_era(faction.faction_id())
+		_request_advance(world, faction.faction_id())
 	if _want(species, species.ai_military_weight if species else 1.0, 0.9):
 		_move_soldiers(world, faction, region)
 
@@ -79,7 +79,7 @@ func _consider_buildings(world: SimWorld, faction: SimFaction, region: SimRegion
 		var cell: Vector2i = _pick_build_cell(region, fid, building_type, species)
 		if cell.x < 0:
 			continue
-		if world.place_building(fid, building_type, cell) >= 0:
+		if _request_place(world, fid, building_type, cell) >= 0:
 			return
 
 
@@ -100,7 +100,7 @@ func _consider_workers(world: SimWorld, faction: SimFaction, species: SpeciesDat
 	var expand: float = 1.0 if species == null else species.ai_expand_weight
 	if expand < 0.8 and region.units_for(fid).size() >= 4:
 		return
-	world.queue_training(fid, SimIds.WORKER)
+	_request_train(world, fid, SimIds.WORKER)
 
 
 func _consider_soldiers(world: SimWorld, faction: SimFaction, species: SpeciesData) -> void:
@@ -118,7 +118,7 @@ func _consider_soldiers(world: SimWorld, faction: SimFaction, species: SpeciesDa
 	var cap: int = 4 if (species != null and species.ai_military_weight >= 1.4) else 2
 	if soldiers >= cap:
 		return
-	world.queue_training(fid, SimIds.SOLDIER)
+	_request_train(world, fid, SimIds.SOLDIER)
 
 
 func _assign_idle_workers(world: SimWorld, faction: SimFaction, region: SimRegion, species: SpeciesData) -> void:
@@ -156,7 +156,7 @@ func _assign_idle_workers(world: SimWorld, faction: SimFaction, region: SimRegio
 		if node == null:
 			node = _nearest_node(world, region, unit.position, &"", species, fid)
 		if node != null:
-			world.order_gather(unit.id, node.node_id)
+			_request_gather(world, unit.id, node.node_id)
 
 
 func _needed_resource(world: SimWorld, faction: SimFaction, species: SpeciesData) -> StringName:
@@ -228,7 +228,7 @@ func _consider_extractor(world: SimWorld, faction: SimFaction, region: SimRegion
 	var cell: Vector2i = _pick_extractor_cell(world, region, faction.faction_id())
 	if cell.x < 0:
 		return
-	world.place_building(faction.faction_id(), SimIds.EXTRACTOR, cell)
+	_request_place(world, faction.faction_id(), SimIds.EXTRACTOR, cell)
 
 
 func _pick_extractor_cell(world: SimWorld, region: SimRegion, faction_id: StringName) -> Vector2i:
@@ -261,7 +261,7 @@ func _move_soldiers(world: SimWorld, faction: SimFaction, region: SimRegion) -> 
 			continue
 		if unit.has_destination and unit.position.distance_to(unit.destination) > region.cell_size() * 0.5:
 			continue
-		world.order_move(unit.id, target)
+		_request_move(world, unit.id, target)
 
 
 func _rare_contest_point(world: SimWorld, region: SimRegion, faction_id: StringName) -> Vector3:
@@ -293,12 +293,12 @@ func _consider_escalation(world: SimWorld, faction: SimFaction, region: SimRegio
 				continue
 			var cell: Vector2i = _pick_outpost_cell(world, region, fid, node)
 			if cell.x >= 0:
-				world.place_building(fid, SimIds.OUTPOST, cell)
+				_request_place(world, fid, SimIds.OUTPOST, cell)
 				return
 		elif choice == &"skirmish":
 			_move_soldiers_to_hex(world, faction, region, node.hex)
 			world.claims.refresh_occupation(region)
-			var sid: int = world.start_skirmish(fid, node.node_id, node.hex, true)
+			var sid: int = _request_skirmish(world, fid, node.node_id, node.hex, true)
 			if sid >= 0:
 				return
 
@@ -381,4 +381,40 @@ func _move_soldiers_to_hex(world: SimWorld, faction: SimFaction, region: SimRegi
 	for unit: SimUnit in region.units_for(faction.faction_id()):
 		if not SimCatalog.is_military(unit.unit_type):
 			continue
-		world.order_move(unit.id, dest)
+		_request_move(world, unit.id, dest)
+
+
+func _request_place(world: SimWorld, faction_id: StringName, building_type: StringName, cell: Vector2i) -> int:
+	if world.commands != null:
+		return world.commands.place_building(faction_id, building_type, cell)
+	return world.place_building(faction_id, building_type, cell)
+
+
+func _request_train(world: SimWorld, faction_id: StringName, unit_type: StringName) -> bool:
+	if world.commands != null:
+		return world.commands.train_unit(faction_id, unit_type)
+	return world.queue_training(faction_id, unit_type)
+
+
+func _request_gather(world: SimWorld, unit_id: int, node_id: StringName) -> bool:
+	if world.commands != null:
+		return world.commands.assign_gather(unit_id, node_id)
+	return world.order_gather(unit_id, node_id)
+
+
+func _request_move(world: SimWorld, unit_id: int, destination: Vector3) -> bool:
+	if world.commands != null:
+		return world.commands.move_unit(unit_id, destination)
+	return world.order_move(unit_id, destination)
+
+
+func _request_advance(world: SimWorld, faction_id: StringName) -> bool:
+	if world.commands != null:
+		return world.commands.advance_era(faction_id)
+	return world.try_advance_era(faction_id)
+
+
+func _request_skirmish(world: SimWorld, faction_id: StringName, node_id: StringName, hex: Vector2i, auto_battle: bool = true) -> int:
+	if world.commands != null:
+		return world.commands.start_skirmish(faction_id, node_id, hex, auto_battle)
+	return world.start_skirmish(faction_id, node_id, hex, auto_battle)

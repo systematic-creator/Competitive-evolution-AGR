@@ -22,6 +22,10 @@ func _run() -> void:
 	_test_escalation_ladder_and_skirmish()
 	_test_occupy_blocks_claim_and_destroy()
 	_test_ai_escalation_personality()
+	_test_per_species_eras()
+	_test_soft_cap_cost_scaling()
+	_test_win_conditions()
+	_test_determinism()
 	print("%d passed, %d failed" % [_passed, _failed])
 	var code: int = 1 if _failed > 0 else 0
 	if DisplayServer.get_name() == "headless":
@@ -598,3 +602,163 @@ func _structure_cell_at_distance(world: SimWorld, target_hex: Vector2i, exact_di
 			if region.hex_grid.distance(region.hex_at_cell(cell), target_hex) == exact_dist:
 				return cell
 	return Vector2i(-1, -1)
+
+
+func _test_per_species_eras() -> void:
+	_boot()
+	var world: SimWorld = GameState.world
+	_check("humans start on the Human Stone era", world.get_faction(&"humans").era.era_name == "Stone")
+	_check("Sylvari start on Roots", world.get_faction(&"sylvari").era.era_name == "Roots")
+	_check("Kraal start on Brood", world.get_faction(&"kraal").era.era_name == "Brood")
+	_check("Cogforged start on Clockwork", world.get_faction(&"cogforged").era.era_name == "Clockwork")
+	_check("world era starts at Stone, independent of species tracks", (
+		world.world_era() != null and world.world_era().era_name == "Stone" and world.world_era_index == 0
+	))
+	world.set_faction_era(&"cogforged", 1)
+	_check("Cogforged era track advances to Steamworks", world.get_faction(&"cogforged").era.era_name == "Steamworks")
+	_check("other species tracks stay on their starting era", world.get_faction(&"humans").era.era_name == "Stone")
+	_check("world era is unchanged when a species advances", world.world_era_index == 0)
+
+
+func _test_soft_cap_cost_scaling() -> void:
+	_check("on-pace advance (world 0 -> era 1) has no soft-cap multiplier", SimCatalog.soft_cap_multiplier(1, 0) == 1.0)
+	_check("one era past grace doubles the cost", is_equal_approx(SimCatalog.soft_cap_multiplier(2, 0), 2.0))
+	_check("two eras past grace quadruples the cost", is_equal_approx(SimCatalog.soft_cap_multiplier(3, 0), 4.0))
+	_check("raising the world era removes the penalty for that index", SimCatalog.soft_cap_multiplier(2, 1) == 1.0)
+	var base: Dictionary = SimCatalog.era_advance_cost(2, null, 1)
+	var taxed: Dictionary = SimCatalog.era_advance_cost(2, null, 0)
+	_check("era-2 costs scale 2x when the world is still era 0", (
+		int(taxed[SimIds.FOOD]) == int(base[SimIds.FOOD]) * 2
+		and int(taxed[SimIds.COAL]) == int(base[SimIds.COAL]) * 2
+	))
+	# Advancing beyond the cap is allowed if you can pay; it is not hard-blocked.
+	_boot()
+	var world: SimWorld = GameState.world
+	world.world_era_index = 0
+	var humans: SimFaction = world.get_faction(SimIds.PLAYER_FACTION)
+	humans.set_resource(SimIds.FOOD, 4000)
+	humans.set_resource(SimIds.WOOD, 4000)
+	humans.set_resource(SimIds.STONE, 4000)
+	humans.set_resource(SimIds.COAL, 400)
+	humans.set_resource(SimIds.IRON, 400)
+	while world.playable.population(SimIds.PLAYER_FACTION) < 10:
+		world._spawn_unit(SimIds.PLAYER_FACTION, SimIds.WORKER, Vector3.ZERO)
+	_check("soft cap does not hard-block a well-funded advance to era 2", world.try_advance_era(SimIds.PLAYER_FACTION) and world.try_advance_era(SimIds.PLAYER_FACTION))
+	_check("human era index is 2 after paying the scaled cost", humans.era.era_index == 2)
+
+
+func _test_win_conditions() -> void:
+	_boot()
+	var world: SimWorld = GameState.world
+	_check("Humans may pursue all three win conditions", (
+		world.get_faction(&"humans").species.can_pursue_win(&"complete_domination")
+		and world.get_faction(&"humans").species.can_pursue_win(&"unbridgeable_superiority")
+		and world.get_faction(&"humans").species.can_pursue_win(&"utter_destruction")
+	))
+	_check("Sylvari may win by domination or superiority, not destruction", (
+		world.get_faction(&"sylvari").species.can_pursue_win(&"complete_domination")
+		and world.get_faction(&"sylvari").species.can_pursue_win(&"unbridgeable_superiority")
+		and not world.get_faction(&"sylvari").species.can_pursue_win(&"utter_destruction")
+	))
+	_check("Kraal may win by destruction or domination, not superiority", (
+		world.get_faction(&"kraal").species.can_pursue_win(&"utter_destruction")
+		and world.get_faction(&"kraal").species.can_pursue_win(&"complete_domination")
+		and not world.get_faction(&"kraal").species.can_pursue_win(&"unbridgeable_superiority")
+	))
+	_check("Cogforged may win by superiority or destruction, not domination", (
+		world.get_faction(&"cogforged").species.can_pursue_win(&"unbridgeable_superiority")
+		and world.get_faction(&"cogforged").species.can_pursue_win(&"utter_destruction")
+		and not world.get_faction(&"cogforged").species.can_pursue_win(&"complete_domination")
+	))
+	# Destruction: wipe every rival, then one tick.
+	var dest_ids: Array[StringName] = []
+	var on_dest := func(fid: StringName, cid: StringName, _cond: WinConditionData) -> void:
+		if cid == &"utter_destruction":
+			dest_ids.append(fid)
+	EventBus.victory_achieved.connect(on_dest)
+	world.eliminate_faction(&"humans")
+	world.eliminate_faction(&"sylvari")
+	world.eliminate_faction(&"cogforged")
+	GameState.step_ticks(1)
+	EventBus.victory_achieved.disconnect(on_dest)
+	_check("Utter Destruction fires for Kraal after all rivals are eliminated", (
+		world.victory.winner_id == &"kraal" and world.victory.winner_condition_id == &"utter_destruction" and dest_ids.has(&"kraal")
+	))
+	# Domination: Sylvari is the only remaining claimant, held for the required ticks.
+	_boot()
+	world = GameState.world
+	var dom_ids: Array[StringName] = []
+	var on_dom := func(fid: StringName, cid: StringName, _cond: WinConditionData) -> void:
+		if cid == &"complete_domination":
+			dom_ids.append(fid)
+	EventBus.victory_achieved.connect(on_dom)
+	world.eliminate_faction(&"humans")
+	world.eliminate_faction(&"kraal")
+	world.eliminate_faction(&"cogforged")
+	GameState.step_ticks(4)
+	EventBus.victory_achieved.disconnect(on_dom)
+	_check("Complete Domination fires for Sylvari after holding the claimed map", (
+		world.victory.winner_id == &"sylvari" and world.victory.winner_condition_id == &"complete_domination" and dom_ids.has(&"sylvari")
+	))
+	# Superiority: era + economy lead over every living rival, held for N ticks.
+	_boot()
+	world = GameState.world
+	var sup_ids: Array[StringName] = []
+	var on_sup := func(fid: StringName, cid: StringName, _cond: WinConditionData) -> void:
+		if cid == &"unbridgeable_superiority":
+			sup_ids.append(fid)
+	EventBus.victory_achieved.connect(on_sup)
+	world.set_faction_era(&"sylvari", 2)
+	var sylvari: SimFaction = world.get_faction(&"sylvari")
+	for resource_id: StringName in SimIds.all_resources():
+		sylvari.set_resource(resource_id, 2000)
+		for other_id: StringName in [&"humans", &"kraal", &"cogforged"]:
+			world.get_faction(other_id).set_resource(resource_id, 0)
+	GameState.step_ticks(4)
+	EventBus.victory_achieved.disconnect(on_sup)
+	_check("Unbridgeable Superiority fires for Sylvari with an era and economy lead", (
+		world.victory.winner_id == &"sylvari" and world.victory.winner_condition_id == &"unbridgeable_superiority" and sup_ids.has(&"sylvari")
+	))
+
+
+func _test_determinism() -> void:
+	GameState.reset()
+	GameState.ai_enabled = false
+	GameState.bootstrap_concept_world(42)
+	var world: SimWorld = GameState.world
+	var commands: CommandService = GameState.commands
+	var humans: SimFaction = world.get_faction(SimIds.PLAYER_FACTION)
+	humans.set_resource(SimIds.WOOD, 80)
+	var tc: SimBuilding = world.playable.buildings_for(SimIds.PLAYER_FACTION)[0]
+	var farm_id: int = _place_near(commands, world, SimIds.PLAYER_FACTION, SimIds.FARM, tc.grid_pos)
+	_check("determinism run issued a farm command", farm_id >= 0)
+	GameState.step_ticks(3)
+	var worker: SimUnit = world.playable.units_for(SimIds.PLAYER_FACTION)[0]
+	_check("determinism run issued a move command", commands.move_unit(worker.id, worker.position + Vector3(0.12, 0.0, 0.04)))
+	GameState.step_ticks(5)
+	var hash_a: int = world.state_hash()
+	var log: Array = []
+	for item: Dictionary in world.command_log:
+		log.append(item.duplicate())
+	var final_tick: int = GameState.tick_count
+	_check("command log is stamped with ticks", log.size() >= 2 and int(log[0].get("tick", -1)) >= 0)
+	GameState.reset()
+	GameState.ai_enabled = false
+	GameState.bootstrap_concept_world(42)
+	GameState.world.get_faction(SimIds.PLAYER_FACTION).set_resource(SimIds.WOOD, 80)
+	GameState.commands.replay(log, final_tick)
+	var hash_b: int = GameState.world.state_hash()
+	_check("same seed and command log replay to an identical state hash", hash_a == hash_b and hash_a != 0)
+	# A second independent run with the same seed and commands must also match.
+	GameState.reset()
+	GameState.ai_enabled = false
+	GameState.bootstrap_concept_world(42)
+	world = GameState.world
+	commands = GameState.commands
+	world.get_faction(SimIds.PLAYER_FACTION).set_resource(SimIds.WOOD, 80)
+	_place_near(commands, world, SimIds.PLAYER_FACTION, SimIds.FARM, world.playable.buildings_for(SimIds.PLAYER_FACTION)[0].grid_pos)
+	GameState.step_ticks(3)
+	worker = world.playable.units_for(SimIds.PLAYER_FACTION)[0]
+	commands.move_unit(worker.id, worker.position + Vector3(0.12, 0.0, 0.04))
+	GameState.step_ticks(5)
+	_check("two live runs with the same seed and commands share a hash", world.state_hash() == hash_a)

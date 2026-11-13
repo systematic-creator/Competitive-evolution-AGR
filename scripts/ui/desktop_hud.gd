@@ -4,6 +4,7 @@ extends CanvasLayer
 
 var _status: Label
 var _log: Label
+var _victory: Label
 var _build_type: StringName = &""
 
 
@@ -43,8 +44,14 @@ func _ready() -> void:
 	_log.text = "Scroll to zoom. Click a glowing pin to enter Verdant Basin. Left-click select, right-click move. OpenXR is off."
 	_log.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	col.add_child(_log)
+	_victory = Label.new()
+	_victory.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	col.add_child(_victory)
 	EventBus.simulation_ticked.connect(func(_t: int) -> void: _refresh())
 	EventBus.era_changed.connect(func(_a: StringName, _b: EraData, _c: EraData) -> void: _refresh())
+	EventBus.world_era_changed.connect(func(_i: int, _a: EraData, _b: EraData) -> void: _refresh())
+	EventBus.victory_progress.connect(func(_a: StringName, _b: StringName, _c: float, _d: int, _e: int) -> void: _refresh())
+	EventBus.victory_achieved.connect(func(_a: StringName, _b: StringName, _c: WinConditionData) -> void: _refresh())
 	_refresh()
 
 
@@ -124,12 +131,15 @@ func _refresh() -> void:
 	if faction == null:
 		return
 	var era_name: String = faction.species.era_label(faction.era) if faction.species != null else faction.era.era_name
+	var world_era: EraData = GameState.world.world_era()
+	var world_era_name: String = world_era.era_name if world_era != null else str(GameState.world.world_era_index)
 	var region: SimRegion = GameState.world.playable
 	var build: String = String(_build_type) if _build_type != &"" else "none"
-	_status.text = "Tier %s  |  %s  Era: %s  |  Food %d  Wood %d  Stone %d  Iron %d  Coal %d  |  Pop %d/%d  |  Build: %s  |  Tick %d" % [
+	_status.text = "Tier %s  |  %s  Era: %s  |  World: %s  |  Food %d  Wood %d  Stone %d  Iron %d  Coal %d  |  Pop %d/%d  |  Build: %s  |  Tick %d" % [
 		str(GameState.ZoomTier.keys()[int(GameState.current_zoom_tier)]),
 		faction.data.display_name,
 		era_name,
+		world_era_name,
 		faction.get_resource(SimIds.FOOD),
 		faction.get_resource(SimIds.WOOD),
 		faction.get_resource(SimIds.STONE),
@@ -140,3 +150,26 @@ func _refresh() -> void:
 		build,
 		GameState.tick_count,
 	]
+	if _victory != null:
+		_victory.text = _victory_line(GameState.world, faction)
+
+
+func _victory_line(world: SimWorld, faction: SimFaction) -> String:
+	if world == null or world.victory == null:
+		return ""
+	if world.victory.winner_id != &"":
+		var winner: SimFaction = world.get_faction(world.victory.winner_id)
+		var wname: String = String(world.victory.winner_id) if winner == null or winner.data == null else winner.data.display_name
+		return "VICTORY: %s — %s" % [wname, String(world.victory.winner_condition_id).replace("_", " ").capitalize()]
+	var bits: PackedStringArray = PackedStringArray()
+	for row: Dictionary in world.victory.player_rows(world):
+		var pct: int = int(round(float(row.get("progress", 0.0)) * 100.0))
+		bits.append("%s %d%% (%d/%d)" % [
+			str(row.get("name", "")),
+			pct,
+			int(row.get("held", 0)),
+			int(row.get("required", 1)),
+		])
+	if bits.is_empty():
+		return "Win conditions: none available."
+	return "Win: " + "  ·  ".join(bits)

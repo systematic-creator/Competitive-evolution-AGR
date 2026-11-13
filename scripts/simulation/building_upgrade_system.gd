@@ -47,12 +47,12 @@ func can_advance_era(world: SimWorld, faction: SimFaction) -> bool:
 	if faction == null or faction.era == null:
 		return false
 	var next_index: int = faction.era.era_index + 1
-	var next_era: EraData = SimCatalog.era_by_index(world.eras, next_index)
+	var next_era: EraData = SimCatalog.era_by_index(world.eras_for_faction(faction), next_index)
 	if next_era == null:
 		return false
 	if world.playable.population(faction.faction_id()) < SimCatalog.era_advance_min_pop(next_index):
 		return false
-	return faction.can_afford(SimCatalog.era_advance_cost(next_index, faction.species))
+	return faction.can_afford(SimCatalog.era_advance_cost(next_index, faction.species, world.world_era_index))
 
 
 func advance_era(world: SimWorld, faction: SimFaction) -> bool:
@@ -60,8 +60,8 @@ func advance_era(world: SimWorld, faction: SimFaction) -> bool:
 		return false
 	var previous: EraData = faction.era
 	var next_index: int = previous.era_index + 1
-	var next_era: EraData = SimCatalog.era_by_index(world.eras, next_index)
-	if not faction.pay(SimCatalog.era_advance_cost(next_index, faction.species)):
+	var next_era: EraData = SimCatalog.era_by_index(world.eras_for_faction(faction), next_index)
+	if not faction.pay(SimCatalog.era_advance_cost(next_index, faction.species, world.world_era_index)):
 		return false
 	faction.era = next_era
 	EventBus.era_changed.emit(faction.faction_id(), next_era, previous)

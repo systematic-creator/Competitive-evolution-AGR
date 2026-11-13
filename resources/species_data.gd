@@ -21,6 +21,8 @@ extends Resource
 @export_group("Starting Bonuses")
 ## Era index this species starts in (see EraData.era_index).
 @export var starting_era_index: int = 0
+## WinConditionData.condition_id values this species may pursue.
+@export var allowed_win_condition_ids: Array[StringName] = []
 ## Resource ID (StringName, e.g. `&"food"`) -> starting amount (int).
 @export var starting_resources: Dictionary = {}
 @export var starting_unit_count: int = 3
@@ -91,3 +93,7 @@ func era_label(era: EraData) -> String:
 		if not label.is_empty():
 			return label
 	return era.era_name
+
+
+func can_pursue_win(condition_id: StringName) -> bool:
+	return allowed_win_condition_ids.has(condition_id)

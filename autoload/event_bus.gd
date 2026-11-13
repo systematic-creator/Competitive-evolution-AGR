@@ -126,3 +126,18 @@ signal skirmish_possession_requested(skirmish_id: int, faction_id: StringName, n
 @warning_ignore("unused_signal")
 signal build_mode_changed(active: bool)
 
+# --- World era / victory ----------------------------------------------------
+
+## The shared world era advanced (soft cap). Species tracks stay independent.
+@warning_ignore("unused_signal")
+signal world_era_changed(world_era_index: int, new_era: EraData, previous_era: EraData)
+
+## Win-condition progress for a faction. `progress` is 0–1; `held` / `required`
+## are consecutive qualifying ticks.
+@warning_ignore("unused_signal")
+signal victory_progress(faction_id: StringName, condition_id: StringName, progress: float, held: int, required: int)
+
+## A faction satisfied a win condition they are allowed to pursue.
+@warning_ignore("unused_signal")
+signal victory_achieved(faction_id: StringName, condition_id: StringName, condition: WinConditionData)
+

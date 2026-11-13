@@ -97,3 +97,9 @@ res://
   3. **Skirmishes:** limited squad fights over a specific hex. The player may auto-battle (resolved by the sim) or request Tier 4 possession (hook is stubbed; `resolve_skirmish_auto` still settles it). A won auto-battle on a structure's hex captures that structure and transfers its claims.
 * FactionAI picks the next step with `node_value × personality`: Kraal aggressive, Sylvari defensive, Cogforged methodical.
 * The faint hex overlay (borders from hex ownership) is shown only in Tier 3 build/claim mode.
+
+## 9. Win conditions, species eras, and determinism
+* `WinConditionData` lives in `data/win_conditions/`. The pool is Complete Domination (hold 60% of all claimed hexes for 4 ticks), Unbridgeable Superiority (era lead + 1.5x economy over every living rival for 4 ticks), and Utter Destruction (no remaining rival units or structures).
+* Each species lists the subset it may pursue. **Humans (balanced / player) may use all three.** Kraal: destruction + domination. Sylvari: domination + superiority. Cogforged: superiority + destruction. EventBus emits `victory_progress` and `victory_achieved`; the desktop HUD shows the player's progress.
+* Each species has its own `EraData` track (Humans: Stone–Industrial; Sylvari: Roots–Elderwood; Kraal: Brood–Empire; Cogforged: Clockwork–Synthetics). A shared **world era** advances every 24 ticks and is a soft cap: a faction may be one era ahead at normal cost; each extra era above that multiplies advance costs by 2 (not a hard block).
+* Multiplayer readiness: `SimWorld` owns a seeded `RandomNumberGenerator`. Ticks are fixed-step. All orders go through `CommandService` as tick-stamped dictionaries in `command_log`, which can be replayed. `state_hash()` is the determinism check.

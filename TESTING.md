@@ -36,7 +36,7 @@ rare-cost gating for later era advances and specialized units, Cogforged
 extractors boosting rare-node yield, hex ownership and claimed-hex yield
 split, full-control capture, the outpost escalation ladder, auto-battle
 skirmishes that flip a captured outpost, the possession stub, occupation
-blocking enemy claims, and destroying a structure releasing its claim.
+blocking enemy claims, and destroying a structure releasing its claim. They also cover per-species era tracks, world-era soft-cap cost scaling, each win condition (plus species subsets), and determinism (same seed + command log => identical state hash).
 
 ## Before AR export (not needed for this concept)
 

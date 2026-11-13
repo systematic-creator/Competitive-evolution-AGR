@@ -43,3 +43,4 @@ can_build_extractors = false
 extractor_rare_yield_bonus = 0.0
 ai_rare_weight = 1.25
 ai_escalation_style = &"aggressive"
+allowed_win_condition_ids = Array[StringName]([&"utter_destruction", &"complete_domination"])

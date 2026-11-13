@@ -102,11 +102,12 @@ func step_ticks(count: int) -> void:
 		EventBus.simulation_ticked.emit(tick_count)
 
 
-func bootstrap_concept_world() -> void:
+func bootstrap_concept_world(seed: int = 1) -> void:
 	world = SimWorld.new()
-	world.bootstrap_default()
+	world.bootstrap_default(seed)
 	commands = CommandService.new()
 	commands.world = world
+	world.commands = commands
 	for faction_id: StringName in world.faction_ids():
 		var sim_faction: SimFaction = world.get_faction(faction_id)
 		if not factions.has(faction_id):

@@ -3,11 +3,49 @@ extends Object
 ## Static building / unit / era costs and rules for the concept build.
 
 const ERA_PATHS: Array[String] = [
-	"res://data/eras/stone.tres",
-	"res://data/eras/bronze.tres",
-	"res://data/eras/iron.tres",
-	"res://data/eras/industrial.tres",
+	"res://data/eras/world/stone.tres",
+	"res://data/eras/world/bronze.tres",
+	"res://data/eras/world/iron.tres",
+	"res://data/eras/world/industrial.tres",
 ]
+const WORLD_ERA_PATHS: Array[String] = ERA_PATHS
+const SPECIES_ERA_PATHS: Dictionary = {
+	&"human": [
+		"res://data/eras/human/stone.tres",
+		"res://data/eras/human/bronze.tres",
+		"res://data/eras/human/iron.tres",
+		"res://data/eras/human/industrial.tres",
+	],
+	&"sylvari": [
+		"res://data/eras/sylvari/stone.tres",
+		"res://data/eras/sylvari/bronze.tres",
+		"res://data/eras/sylvari/iron.tres",
+		"res://data/eras/sylvari/industrial.tres",
+	],
+	&"kraal": [
+		"res://data/eras/kraal/stone.tres",
+		"res://data/eras/kraal/bronze.tres",
+		"res://data/eras/kraal/iron.tres",
+		"res://data/eras/kraal/industrial.tres",
+	],
+	&"cogforged": [
+		"res://data/eras/cogforged/stone.tres",
+		"res://data/eras/cogforged/bronze.tres",
+		"res://data/eras/cogforged/iron.tres",
+		"res://data/eras/cogforged/industrial.tres",
+	],
+}
+const WIN_CONDITION_PATHS: Array[String] = [
+	"res://data/win_conditions/complete_domination.tres",
+	"res://data/win_conditions/unbridgeable_superiority.tres",
+	"res://data/win_conditions/utter_destruction.tres",
+]
+## Multiplier applied once per era a faction advances past (world_era + grace).
+const WORLD_ERA_SOFT_CAP_BASE: float = 2.0
+## A faction may be this many eras ahead of the world at normal cost.
+const WORLD_ERA_GRACE: int = 1
+## World era index increases once per this many ticks.
+const WORLD_ERA_INTERVAL: int = 24
 const SPECIES_PATHS: Array[String] = [
 	"res://data/species/human.tres",
 	"res://data/species/sylvari.tres",
@@ -33,9 +71,30 @@ const NODE_LAYOUT_PATHS: Array[String] = [
 
 
 static func load_eras() -> Array[EraData]:
+	return load_world_eras()
+
+
+static func load_world_eras() -> Array[EraData]:
 	var out: Array[EraData] = []
-	for path: String in ERA_PATHS:
+	for path: String in WORLD_ERA_PATHS:
 		out.append(load(path) as EraData)
+	return out
+
+
+static func load_eras_for_species(species_id: StringName) -> Array[EraData]:
+	var paths: Variant = SPECIES_ERA_PATHS.get(species_id, WORLD_ERA_PATHS)
+	var out: Array[EraData] = []
+	for path in paths:
+		out.append(load(str(path)) as EraData)
+	return out
+
+
+static func load_win_conditions() -> Array[WinConditionData]:
+	var out: Array[WinConditionData] = []
+	for path: String in WIN_CONDITION_PATHS:
+		var data: WinConditionData = load(path) as WinConditionData
+		if data != null:
+			out.append(data.duplicate() as WinConditionData)
 	return out
 
 
@@ -243,7 +302,14 @@ static func unit_speed(unit_type: StringName, species: SpeciesData) -> float:
 	return base * mult
 
 
-static func era_advance_cost(next_index: int, species: SpeciesData) -> Dictionary:
+static func soft_cap_multiplier(next_index: int, world_era_index: int) -> float:
+	var ahead: int = next_index - world_era_index - WORLD_ERA_GRACE
+	if ahead <= 0:
+		return 1.0
+	return pow(WORLD_ERA_SOFT_CAP_BASE, float(ahead))
+
+
+static func era_advance_cost(next_index: int, species: SpeciesData, world_era_index: int = 0) -> Dictionary:
 	var cost: Dictionary = {}
 	match next_index:
 		1:
@@ -270,6 +336,7 @@ static func era_advance_cost(next_index: int, species: SpeciesData) -> Dictionar
 	# Research speed also shortens the resource bar Humans need to clear.
 	if species != null:
 		mult /= max(0.5, species.research_speed_multiplier)
+	mult *= soft_cap_multiplier(next_index, world_era_index)
 	var scaled: Dictionary = {}
 	for resource_id: StringName in cost:
 		scaled[resource_id] = int(max(1.0, round(float(int(cost[resource_id])) * mult)))

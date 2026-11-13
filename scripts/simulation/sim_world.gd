@@ -11,7 +11,18 @@ var ticks: ResourceTick = ResourceTick.new()
 var upgrades: BuildingUpgradeSystem = BuildingUpgradeSystem.new()
 var ai: FactionAI = FactionAI.new()
 var claims: ClaimSystem = ClaimSystem.new()
+var victory: VictorySystem = VictorySystem.new()
 var node_layouts: Array[RegionNodeLayout] = []
+## species_id -> Array[EraData]
+var species_eras: Dictionary = {}
+var world_era_index: int = 0
+var world_era_elapsed: int = 0
+var current_tick: int = 0
+var rng: RandomNumberGenerator = RandomNumberGenerator.new()
+var rng_seed: int = 1
+var command_log: Array[Dictionary] = []
+## Set by GameState after bootstrap so AI orders go through CommandService.
+var commands: CommandService
 
 ## Starting town centers: SW Humans, NW Sylvari, NE Kraal, SE Cogforged.
 const START_CELLS: Dictionary = {
@@ -22,9 +33,20 @@ const START_CELLS: Dictionary = {
 }
 
 
-func bootstrap_default() -> void:
-	eras = SimCatalog.load_eras()
+func bootstrap_default(p_seed: int = 1) -> void:
+	configure_seed(p_seed)
+	current_tick = 0
+	command_log.clear()
+	world_era_index = 0
+	world_era_elapsed = 0
+	eras = SimCatalog.load_world_eras()
 	PrimitiveCatalog.apply_to_eras(eras)
+	species_eras.clear()
+	for species_id: StringName in SimCatalog.SPECIES_ERA_PATHS:
+		var track: Array[EraData] = SimCatalog.load_eras_for_species(species_id)
+		PrimitiveCatalog.apply_to_eras(track)
+		species_eras[species_id] = track
+	victory.setup(SimCatalog.load_win_conditions())
 	region_catalog = SimCatalog.load_regions()
 	node_layouts = SimCatalog.load_node_layouts()
 	_bootstrap_factions()
@@ -32,6 +54,7 @@ func bootstrap_default() -> void:
 	_place_starting_pieces()
 	_place_nodes()
 	claims.update(self)
+	victory.evaluate(self)
 
 
 func _bootstrap_factions() -> void:
@@ -40,7 +63,8 @@ func _bootstrap_factions() -> void:
 		var sim := SimFaction.new()
 		sim.data = data
 		sim.species = data.species
-		sim.era = SimCatalog.era_by_index(eras, 0 if data.species == null else data.species.starting_era_index)
+		var start_index: int = 0 if data.species == null else data.species.starting_era_index
+		sim.era = SimCatalog.era_by_index(eras_for_faction(sim), start_index)
 		if sim.era == null and not eras.is_empty():
 			sim.era = eras[0]
 		for resource_id: StringName in SimIds.all_resources():
@@ -181,17 +205,20 @@ func get_region_data(region_id: StringName) -> RegionData:
 
 
 func step(tick: int, ai_enabled: bool = true) -> void:
+	current_tick = tick
 	upgrades.progress_construction(self)
 	claims.update(self)
 	upgrades.progress_training(self)
 	ticks.apply(self)
 	_move_units()
 	claims.refresh_occupation(playable)
+	_advance_world_era()
 	if ai_enabled:
 		for faction_id: StringName in faction_ids():
 			var faction: SimFaction = get_faction(faction_id)
 			if faction != null and not faction.is_player():
 				ai.act(self, faction, tick)
+	victory.evaluate(self)
 
 
 func _move_units() -> void:
@@ -346,7 +373,7 @@ func reveal_era_for_resource(resource_id: StringName) -> int:
 
 func set_faction_era(faction_id: StringName, era_index: int) -> bool:
 	var faction: SimFaction = get_faction(faction_id)
-	var next_era: EraData = SimCatalog.era_by_index(eras, era_index)
+	var next_era: EraData = SimCatalog.era_by_index(eras_for_faction(faction), era_index)
 	if faction == null or next_era == null:
 		return false
 	var previous: EraData = faction.era
@@ -417,3 +444,127 @@ func destroy_building(building_id: int) -> bool:
 	EventBus.structure_destroyed.emit(building_id, faction_id, building_type, cell)
 	claims.update(self)
 	return true
+
+
+func configure_seed(p_seed: int) -> void:
+	rng_seed = p_seed
+	rng = RandomNumberGenerator.new()
+	rng.seed = p_seed
+
+
+func randi() -> int:
+	return rng.randi()
+
+
+func randf() -> float:
+	return rng.randf()
+
+
+func eras_for_faction(faction: SimFaction) -> Array[EraData]:
+	if faction != null and faction.species != null:
+		var track: Variant = species_eras.get(faction.species.species_id, null)
+		if track != null:
+			var out: Array[EraData] = []
+			for era in track:
+				out.append(era as EraData)
+			return out
+	return eras
+
+
+func world_era() -> EraData:
+	return SimCatalog.era_by_index(eras, world_era_index)
+
+
+func _advance_world_era() -> void:
+	if world_era_index >= 3:
+		return
+	world_era_elapsed += 1
+	if world_era_elapsed < SimCatalog.WORLD_ERA_INTERVAL:
+		return
+	world_era_elapsed = 0
+	var previous: EraData = world_era()
+	world_era_index += 1
+	var next_era: EraData = world_era()
+	EventBus.world_era_changed.emit(world_era_index, next_era, previous)
+
+
+func faction_eliminated(faction_id: StringName) -> bool:
+	if playable == null:
+		return true
+	if not playable.units_for(faction_id).is_empty():
+		return false
+	for building: SimBuilding in playable.buildings_for(faction_id):
+		return false
+	return get_faction(faction_id) != null
+
+
+func eliminate_faction(faction_id: StringName) -> bool:
+	if playable == null or get_faction(faction_id) == null:
+		return false
+	var unit_ids: Array[int] = []
+	for unit: SimUnit in playable.units_for(faction_id):
+		unit_ids.append(unit.id)
+	for unit_id: int in unit_ids:
+		playable.units.erase(unit_id)
+	var building_ids: Array[int] = []
+	for building: SimBuilding in playable.buildings_for(faction_id):
+		building_ids.append(building.id)
+	for building_id: int in building_ids:
+		playable.remove_building(building_id)
+	claims.update(self)
+	return true
+
+
+func state_hash() -> int:
+	var parts: PackedStringArray = PackedStringArray()
+	parts.append("tick=%d" % current_tick)
+	parts.append("world_era=%d" % world_era_index)
+	parts.append("seed=%d" % rng_seed)
+	parts.append("rng=%d" % rng.state)
+	var ids: Array[StringName] = faction_ids()
+	ids.sort()
+	for faction_id: StringName in ids:
+		var faction: SimFaction = get_faction(faction_id)
+		var era_index: int = -1 if faction.era == null else faction.era.era_index
+		var era_name: String = "" if faction.era == null else faction.era.era_name
+		parts.append("f:%s:era=%d:%s" % [String(faction_id), era_index, era_name])
+		var res_ids: Array[StringName] = SimIds.all_resources()
+		for resource_id: StringName in res_ids:
+			parts.append("r:%s:%s=%d" % [String(faction_id), String(resource_id), faction.get_resource(resource_id)])
+	if playable != null:
+		var b_ids: Array[int] = []
+		for bid in playable.buildings.keys():
+			b_ids.append(int(bid))
+		b_ids.sort()
+		for bid: int in b_ids:
+			var building: SimBuilding = playable.get_building(bid)
+			parts.append("b:%d:%s:%s:%d:%d:%d:%d" % [
+				building.id, String(building.faction_id), String(building.building_type),
+				building.grid_pos.x, building.grid_pos.y, int(building.constructed), building.hp
+			])
+		var u_ids: Array[int] = []
+		for uid in playable.units.keys():
+			u_ids.append(int(uid))
+		u_ids.sort()
+		for uid: int in u_ids:
+			var unit: SimUnit = playable.get_unit(uid)
+			var px: int = int(round(unit.position.x * 10000.0))
+			var pz: int = int(round(unit.position.z * 10000.0))
+			parts.append("u:%d:%s:%s:%d:%d:%d:%s" % [
+				unit.id, String(unit.faction_id), String(unit.unit_type), px, pz, unit.hp, String(unit.assigned_node_id)
+			])
+		var claim_keys: Array[int] = []
+		for key in playable.hex_claims.keys():
+			claim_keys.append(int(key))
+		claim_keys.sort()
+		for key: int in claim_keys:
+			parts.append("h:%d=%s" % [key, String(playable.hex_claims[key])])
+		var node_ids: Array[String] = []
+		for nid in playable.nodes.keys():
+			node_ids.append(String(nid))
+		node_ids.sort()
+		for nid: String in node_ids:
+			var node: SimResourceNode = playable.get_node(StringName(nid))
+			parts.append("n:%s=%d:%s" % [nid, node.remaining, String(node.hard_claimer)])
+	var joined: String = "|".join(parts)
+	return hash(joined)
