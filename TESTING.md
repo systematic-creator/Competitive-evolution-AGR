@@ -30,7 +30,7 @@ If the editor warns that Vulkan is not supported, switch the renderer to
 ## Android APK (debug, arm64)
 
 `export_presets.cfg` has an **Android** preset (no Gradle build, arm64-v8a,
-Compatibility renderer on mobile, landscape). With the Godot 4.3 export
+Compatibility renderer on mobile, landscape). With the Godot 4.4.1 export
 templates installed and the Android SDK / debug keystore set in Editor
 Settings:
 
@@ -49,11 +49,15 @@ and Attack / Auto-resolve buttons.
 1. Install an Android SDK with `platforms;android-33`, `platforms;android-34`,
    `build-tools;33.0.2`, `build-tools;34.0.0`, `cmake;3.22.1` and
    `ndk;23.2.8568313`, plus JDK 17 and `pip install scons`.
-2. Build and install the patched plugin:
-   `ANDROID_HOME=/path/to/sdk tools/arcore_plugin/build_arcore_plugin.sh`
+2. Build and install the patched plugin (Godot **4.4+** only; 4.3 lacks the
+   `CameraFeed` APIs the passthrough needs):
+   `ANDROID_HOME=/path/to/sdk GODOT_BIN=/path/to/godot-4.4.1 tools/arcore_plugin/build_arcore_plugin.sh`
    (this creates `addons/ARCorePlugin/bin/` and `plugin.gdextension`).
-3. In the editor: Project → Install Android Build Template, then export the
-   **Android AR** preset (Gradle build, camera permission, minSdk 24).
+3. Export the **Android AR** preset (Gradle build, camera permission,
+   minSdk 24), e.g. headless:
+   `godot --headless --path . --install-android-build-template --export-debug "Android AR" build/competitive-evolution-agr-ar.apk`
+   The Linux/Windows editor logs "No GDExtension library found for current
+   OS" for this Android-only plugin; that is expected.
    After step 2, the plain **Android** preset no longer exports: a
    GDExtension Android plugin needs a Gradle build.
 

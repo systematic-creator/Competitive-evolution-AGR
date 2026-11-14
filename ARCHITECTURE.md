@@ -1,7 +1,7 @@
 # Project Architecture: Competitive Evolution AGR (Godot 4.x)
 
 ## 1. Engine & Target Specs
-* **Engine:** Godot 4.3+ (Forward+ or Mobile Renderer). The desktop concept build uses the Compatibility renderer when captured in CI (`--rendering-method gl_compatibility`).
+* **Engine:** Godot 4.4.1+ (4.4 is required by the ARCore plugin's camera passthrough: `CameraFeed.set_external()`; Forward+ or Mobile Renderer). The desktop concept build uses the Compatibility renderer when captured in CI (`--rendering-method gl_compatibility`).
 * **Language:** Strictly typed GDScript 2.0 (`class_name`, static typing on all variables/functions)
 * **AR Backend (Android):** the GodotVR `godot_arcore` GDExtension plugin, patched with horizontal-plane hit tests and ARCore anchors (`tools/arcore_plugin/`), shipped in a Gradle build. (The OpenXR Vendors plugin targets headsets, not phone AR, so **OpenXR stays disabled**.) iOS/ARKit is not covered.
 * **World Scale:** 1 Godot Unit = 1 Meter in real-world AR space (and in the desktop stand-in).

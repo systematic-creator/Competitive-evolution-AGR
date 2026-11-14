@@ -1,12 +1,12 @@
 # Competitive Evolution AGR
 
-Mobile AR real-time strategy and species/faction evolution game built in **Godot 4.3+** (strictly typed GDScript 2.0). Players anchor a virtual world to physical space and move closer or farther to travel across four gameplay scales.
+Mobile AR real-time strategy and species/faction evolution game built in **Godot 4.4.1+** (strictly typed GDScript 2.0). Players anchor a virtual world to physical space and move closer or farther to travel across four gameplay scales.
 
 This repository also includes a **desktop concept build**: a full orbit globe, one playable region, three AI factions, and one player faction, with the AR zoom stand-in mapped to mouse-wheel camera distance. OpenXR stays off so the project runs on a desktop or headless CI machine.
 
 ## Quick start (desktop)
 
-1. Open the project in Godot 4.3 (or run the official Linux editor binary).
+1. Open the project in Godot 4.4.1 (or run the official Linux editor binary).
 2. The main scene is `scenes/main_desktop.tscn`.
 3. Press Play.
     - **Scroll** to move between Orbit / Region / RTS distances (1.2m / 0.9m / 0.55m / 0.20m).
