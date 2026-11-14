@@ -11,9 +11,13 @@ signal replace_pressed()
 signal place_pressed()
 signal place_in_front_pressed()
 signal play_without_ar_pressed()
+## Five quick taps on the step panel toggle the AR debug line.
+signal debug_toggled(visible: bool)
 
 const PRIMARY_SIZE: Vector2 = Vector2(260.0, 96.0)
 const SECONDARY_SIZE: Vector2 = Vector2(170.0, 80.0)
+const DEBUG_TAPS: int = 5
+const DEBUG_TAP_WINDOW: float = 2.0
 
 var title_label: Label
 var status_label: Label
@@ -27,10 +31,15 @@ var unlock_button: Button
 var magnify_button: Button
 var recenter_button: Button
 var replace_button: Button
+var debug_label: Label
+## Debug line shown because the player toggled it (5 taps on the panel).
+var debug_requested: bool = false
 
 var _sweep_phone: Panel
 var _sweep_time: float = 0.0
 var _banner: PanelContainer
+var _tap_times: Array[float] = []
+var _clock: float = 0.0
 
 
 func _ready() -> void:
@@ -48,7 +57,10 @@ func _ready() -> void:
 
 	# Top: step title + live status on a dark banner so it reads over video.
 	_banner = PanelContainer.new()
-	_banner.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	# STOP so taps on the panel count toward the debug toggle and never
+	# place the board by accident.
+	_banner.mouse_filter = Control.MOUSE_FILTER_STOP
+	_banner.gui_input.connect(_on_banner_input)
 	_banner.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	var style := StyleBoxFlat.new()
 	style.bg_color = Color(0.03, 0.05, 0.08, 0.72)
@@ -119,10 +131,29 @@ func _ready() -> void:
 	magnify_button = _button(row, "Magnify", SECONDARY_SIZE, false)
 	magnify_button.toggle_mode = true
 	magnify_button.toggled.connect(func(on: bool) -> void: magnify_toggled.emit(on))
+
+	# Small AR diagnostics line, bottom-left, above everything else.
+	debug_label = Label.new()
+	debug_label.name = "ARDebug"
+	debug_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	debug_label.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
+	debug_label.offset_top = -118.0
+	debug_label.offset_bottom = -4.0
+	debug_label.offset_left = 8.0
+	debug_label.offset_right = -8.0
+	debug_label.vertical_alignment = VERTICAL_ALIGNMENT_BOTTOM
+	debug_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	debug_label.add_theme_font_size_override("font_size", 15)
+	debug_label.add_theme_color_override("font_color", Color(1.0, 1.0, 0.6))
+	debug_label.add_theme_color_override("font_outline_color", Color.BLACK)
+	debug_label.add_theme_constant_override("outline_size", 5)
+	debug_label.visible = false
+	add_child(debug_label)
 	apply_flow(CalibrationFlow.new())
 
 
 func _process(delta: float) -> void:
+	_clock += delta
 	if sweep_hint == null or not sweep_hint.visible:
 		return
 	_sweep_time += delta
@@ -196,4 +227,35 @@ func is_over_ui(screen_position: Vector2) -> bool:
 	for button: Button in [place_button, place_in_front_button, play_without_ar_button, lock_button, unlock_button, magnify_button, recenter_button, replace_button]:
 		if button.visible and button.get_global_rect().has_point(screen_position):
 			return true
+	return _banner.visible and _banner.get_global_rect().has_point(screen_position)
+
+
+## Set the debug text; `forced` shows it even if the player has not toggled it
+## (e.g. after the scan timeout, or in a debuggable build).
+func set_debug_text(text: String, forced: bool) -> void:
+	debug_label.text = text
+	debug_label.visible = (debug_requested or forced) and not text.is_empty()
+
+
+## Count a tap on the step panel; DEBUG_TAPS within DEBUG_TAP_WINDOW toggle.
+func register_panel_tap(now: float) -> bool:
+	_tap_times.append(now)
+	while not _tap_times.is_empty() and now - _tap_times[0] > DEBUG_TAP_WINDOW:
+		_tap_times.pop_front()
+	if _tap_times.size() >= DEBUG_TAPS:
+		_tap_times.clear()
+		debug_requested = not debug_requested
+		debug_label.visible = debug_requested and not debug_label.text.is_empty()
+		debug_toggled.emit(debug_requested)
+		return true
 	return false
+
+
+func _on_banner_input(event: InputEvent) -> void:
+	var pressed: bool = (
+		(event is InputEventScreenTouch and (event as InputEventScreenTouch).pressed)
+		or (event is InputEventMouseButton and (event as InputEventMouseButton).pressed)
+	)
+	if pressed:
+		register_panel_tap(_clock)
+		_banner.accept_event()

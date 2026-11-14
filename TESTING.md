@@ -55,7 +55,21 @@ and Attack / Auto-resolve buttons.
    (this creates `addons/ARCorePlugin/bin/` and `plugin.gdextension`).
 3. Export the **Android AR** preset (Gradle build, camera permission,
    minSdk 24), e.g. headless:
-   `godot --headless --path . --install-android-build-template --export-debug "Android AR" build/competitive-evolution-agr-ar.apk`
+   `godot --headless --path . --install-android-build-template --export-release "Android AR" build/competitive-evolution-agr-ar.apk`
+
+   **Export release (non-debuggable) builds for phones.** On Samsung phones
+   with Google Play Services for AR 1.52+, ARCore barely tracks in a
+   *debuggable* app: no feature points, no planes, anchors drift
+   (google-ar/arcore-android-sdk#1750, #1757). A Godot debug export is always
+   debuggable. For a sideloaded test build, sign the release export with the
+   Godot debug keystore through environment variables, so no secrets go in
+   the repo:
+
+   ```bash
+   export GODOT_ANDROID_KEYSTORE_RELEASE_PATH=~/.local/share/godot/keystores/debug.keystore
+   export GODOT_ANDROID_KEYSTORE_RELEASE_USER=androiddebugkey
+   export GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD=android
+   ```
    The Linux/Windows editor logs "No GDExtension library found for current
    OS" for this Android-only plugin; that is expected.
    After step 2, the plain **Android** preset no longer exports: a
@@ -76,6 +90,20 @@ run and no win can be checked during setup.
 3. **Adjust.** Drag to move, pinch to scale and twist to rotate, then press
    **Lock** to start play. **Re-place** goes back to step 1.
 
+If ARCore is not tracking yet, **Place in front of me** holds the board in
+front of the camera (it never slides away) and turns it into a world anchor
+after one second of continuous tracking.
+
+Tap the step panel five times to show the AR debug line. It also shows by
+itself after the scan timeout and in debuggable builds. It lists, in order:
+interface initialized, primary XR interface, `use_xr`, the `ArSession_resume`
+and `ArSession_configure` status, the last `ArSession_update` status (with
+ok/error counts), the camera tracking state and failure reason, the number of
+tracked frames, new camera frames (timestamp changes), feature points and the
+point-cloud status, surfaces (upward / any state), the camera texture id, the
+camera position, the display size, the ARCore (Play Services for AR) version,
+and whether the app is debuggable.
+
 Once locked, walk closer to zoom from Orbit → Region → RTS.
 
 ## Headless tests
@@ -84,7 +112,7 @@ Once locked, walk closer to zoom from Orbit → Region → RTS.
 godot --headless --path . --import
 godot --headless --path . res://scenes/debug/smoke_test.tscn   # 14 passed
 godot --headless --path . res://scenes/debug/sim_tests.tscn    # 165 passed
-godot --headless --path . res://scenes/debug/ar_tests.tscn     # 84 passed
+godot --headless --path . res://scenes/debug/ar_tests.tscn     # 95 passed
 ```
 
 Both print `PASS` / `FAIL` lines and quit non-zero on failure when headless.

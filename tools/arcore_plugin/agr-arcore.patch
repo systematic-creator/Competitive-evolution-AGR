@@ -1,9 +1,9 @@
 diff --git a/plugin/src/main/cpp/arcore_anchors.cpp b/plugin/src/main/cpp/arcore_anchors.cpp
 new file mode 100644
-index 0000000..4f5a939
+index 0000000..63e6c57
 --- /dev/null
 +++ b/plugin/src/main/cpp/arcore_anchors.cpp
-@@ -0,0 +1,368 @@
+@@ -0,0 +1,392 @@
 +// Competitive Evolution AGR additions to the GodotVR ARCore plugin:
 +// horizontal-plane hit testing and ARCore anchors exposed to GDScript.
 +// Licensed under the plugin's MIT license.
@@ -248,6 +248,18 @@ index 0000000..4f5a939
 +	out["update_status"] = m_last_update_status; // ArStatus of the last update
 +	out["frames"] = m_frames_updated;
 +	out["update_errors"] = m_update_errors;
++	out["initialized"] = m_init_status == INITIALISED;
++	out["has_session"] = m_ar_session != nullptr;
++	out["resume_status"] = m_last_resume_status;
++	out["resume_retries"] = m_resume_retries;
++	out["configure_status"] = m_last_configure_status;
++	out["timestamp"] = m_last_frame_timestamp;
++	out["timestamp_changes"] = m_timestamp_changes;
++	out["tracking_frames"] = m_tracking_frames;
++	out["texture_id"] = (int64_t)m_background_renderer.getTextureId();
++	out["display"] = Vector2i(m_display_width, m_display_height);
++	out["camera_position"] = m_last_camera_position;
++	out["vertical_orientation"] = m_vertical_orientation;
 +	int32_t planes = 0;
 +	int32_t upward = 0;
 +	int32_t points = 0;
@@ -280,12 +292,24 @@ index 0000000..4f5a939
 +		ArTrackableList_destroy(list);
 +		if (m_ar_frame != nullptr && m_last_camera_state == AR_TRACKING_STATE_TRACKING) {
 +			ArPointCloud *cloud = nullptr;
-+			if (ArFrame_acquirePointCloud(m_ar_session, m_ar_frame, &cloud) == AR_SUCCESS && cloud != nullptr) {
++			ArStatus cloud_status = ArFrame_acquirePointCloud(m_ar_session, m_ar_frame, &cloud);
++			m_last_point_cloud_status = (int32_t)cloud_status;
++			if (cloud_status == AR_SUCCESS && cloud != nullptr) {
 +				ArPointCloud_getNumberOfPoints(m_ar_session, cloud, &points);
 +				ArPointCloud_release(cloud);
 +			}
 +		}
 +	}
++	out["point_cloud_status"] = m_last_point_cloud_status;
++	int32_t all_planes = 0;
++	if (m_ar_session != nullptr && m_init_status == INITIALISED) {
++		ArTrackableList *all = nullptr;
++		ArTrackableList_create(m_ar_session, &all);
++		ArSession_getAllTrackables(m_ar_session, AR_TRACKABLE_PLANE, all);
++		ArTrackableList_getSize(m_ar_session, all, &all_planes);
++		ArTrackableList_destroy(all);
++	}
++	out["planes_any_state"] = all_planes;
 +	out["planes"] = planes;
 +	out["upward_planes"] = upward;
 +	out["points"] = points;
@@ -373,7 +397,7 @@ index 0000000..4f5a939
 +	m_render_planes = p_enable;
 +}
 diff --git a/plugin/src/main/cpp/arcore_interface.cpp b/plugin/src/main/cpp/arcore_interface.cpp
-index ac0c96c..2ce2220 100644
+index ac0c96c..3aabe62 100644
 --- a/plugin/src/main/cpp/arcore_interface.cpp
 +++ b/plugin/src/main/cpp/arcore_interface.cpp
 @@ -30,6 +30,17 @@ void ARCoreInterface::_bind_methods() {
@@ -394,7 +418,27 @@ index ac0c96c..2ce2220 100644
  	ClassDB::bind_method(D_METHOD("getNear"), &ARCoreInterface::getNear);
  	ClassDB::bind_method(D_METHOD("getFar"), &ARCoreInterface::getFar);
  }
-@@ -377,6 +388,7 @@ void ARCoreInterface::_uninitialize() {
+@@ -50,6 +61,11 @@ ARCoreInterface::ARCoreInterface() {
+ 	m_enable_images_detection = false;
+ 	m_enable_point_cloud_detection = false;
+ 	m_enable_light_estimation = false;
++	// These were left uninitialised upstream. A garbage m_vertical_orientation
++	// rolls the AR camera 90 degrees against the passthrough, so virtual
++	// content slides away as soon as the phone moves.
++	m_vertical_orientation = false;
++	m_tracking_status = XRInterface::XR_UNKNOWN_TRACKING;
+ 
+ 	// This is just a default and will be changed by ARCore
+ 	m_projection.set_perspective(60.0, 1.0, m_z_near, m_z_far, false);
+@@ -74,6 +90,7 @@ void ARCoreInterface::start() {
+ void ARCoreInterface::_resume() {
+ 	if (m_init_status == INITIALISED && m_ar_session != nullptr) {
+ 		ArStatus status = ArSession_resume(m_ar_session);
++		m_last_resume_status = (int32_t)status;
+ 
+ 		if (status != AR_SUCCESS) {
+ 			ALOGE("ARCorePlugin: Failed to resume");
+@@ -377,6 +394,7 @@ void ARCoreInterface::_uninitialize() {
  		ERR_FAIL_NULL(xr_server);
  
  		if (m_ar_session != nullptr) {
@@ -402,8 +446,24 @@ index ac0c96c..2ce2220 100644
  			ArSession_destroy(m_ar_session);
  			ArFrame_destroy(m_ar_frame);
  
-@@ -639,7 +651,14 @@ void ARCoreInterface::_process() {
- 	ArSession_setDisplayGeometry(m_ar_session, (int32_t)(Orientation::ROTATION_90), m_screen_height, m_screen_width);
+@@ -636,10 +654,37 @@ void ARCoreInterface::_process() {
+ 		return;
+ 	}
+ 
+-	ArSession_setDisplayGeometry(m_ar_session, (int32_t)(Orientation::ROTATION_90), m_screen_height, m_screen_width);
++	// A failed resume (camera busy, permission race) leaves the session paused
++	// forever upstream; retry about once a second.
++	if (m_last_resume_status != AR_SUCCESS && (m_update_errors % 60) == 0) {
++		m_resume_retries++;
++		_resume();
++	}
++
++	// The app is locked to landscape (ROTATION_90). Use the live window size so
++	// hit tests and the projection match what is on screen.
++	Size2i window = DisplayServer::get_singleton()->window_get_size();
++	m_display_width = window.x > 0 ? window.x : m_screen_height;
++	m_display_height = window.y > 0 ? window.y : m_screen_width;
++	ArSession_setDisplayGeometry(m_ar_session, (int32_t)(Orientation::ROTATION_90), m_display_width, m_display_height);
  	ArSession_setCameraTextureName(m_ar_session, m_background_renderer.getTextureId());
  
 -	if (ArSession_update(m_ar_session, m_ar_frame) != AR_SUCCESS) {
@@ -414,11 +474,27 @@ index ac0c96c..2ce2220 100644
 +	} else {
 +		m_update_errors++;
 +	}
++	{
++		int64_t timestamp = 0;
++		ArFrame_getTimestamp(m_ar_session, m_ar_frame, &timestamp);
++		if (timestamp != 0 && timestamp != m_last_frame_timestamp) {
++			m_timestamp_changes++;
++		}
++		m_last_frame_timestamp = timestamp;
++	}
 +	if (update_status != AR_SUCCESS) {
  		ALOGW("ARCorePlugin: OnDrawFrame ARSession_update error");
  	}
  
-@@ -687,6 +706,12 @@ void ARCoreInterface::_process() {
+@@ -670,6 +715,7 @@ void ARCoreInterface::_process() {
+ 	}
+ 
+ 	m_view.invert();
++	m_last_camera_position = m_view.origin;
+ 
+ 	if (m_head.is_valid()) {
+ 		// Set our head position, note in real space, reference frame and world scale is applied later
+@@ -687,6 +733,15 @@ void ARCoreInterface::_process() {
  
  	ArTrackingState camera_m_tracking_status;
  	ArCamera_getTrackingState(m_ar_session, ar_camera, &camera_m_tracking_status);
@@ -428,10 +504,13 @@ index ac0c96c..2ce2220 100644
 +		ArCamera_getTrackingFailureReason(m_ar_session, ar_camera, &reason);
 +		m_last_failure_reason = (int32_t)reason;
 +	}
++	if (camera_m_tracking_status == AR_TRACKING_STATE_TRACKING) {
++		m_tracking_frames++;
++	}
  
  	m_tracking_status = ar_tracking_state_to_tracking_status(*m_ar_session, *ar_camera, camera_m_tracking_status);
  
-@@ -701,7 +726,7 @@ void ARCoreInterface::_process() {
+@@ -701,7 +756,7 @@ void ARCoreInterface::_process() {
  		estimateLight();
  	}
  
@@ -440,7 +519,7 @@ index ac0c96c..2ce2220 100644
  		m_plane_renderer.process(*m_ar_session);
  	} else {
  		m_plane_renderer.clear();
-@@ -750,6 +775,10 @@ void ARCoreInterface::notification(int p_what) {
+@@ -750,6 +805,10 @@ void ARCoreInterface::notification(int p_what) {
  }
  
  void ARCoreInterface::configureSession() {
@@ -451,18 +530,23 @@ index ac0c96c..2ce2220 100644
  	ArConfig *ar_config = nullptr;
  	ArConfig_create(m_ar_session, &ar_config);
  	if (is_depth_supported() && m_enable_depth_estimation) {
-@@ -779,6 +808,9 @@ void ARCoreInterface::configureSession() {
+@@ -779,6 +838,13 @@ void ARCoreInterface::configureSession() {
  	}
  
  	ERR_FAIL_NULL(ar_config);
+-	ERR_FAIL_COND(ArSession_configure(m_ar_session, ar_config) != AR_SUCCESS);
 +	// Tabletop range: fixed focus (the default) blurs a table 30-80 cm away and
 +	// starves tracking of features. Auto focus is what Google recommends.
 +	ArConfig_setFocusMode(m_ar_session, ar_config, AR_FOCUS_MODE_AUTO);
- 	ERR_FAIL_COND(ArSession_configure(m_ar_session, ar_config) != AR_SUCCESS);
++	ArStatus configure_status = ArSession_configure(m_ar_session, ar_config);
++	m_last_configure_status = (int32_t)configure_status;
  	ArConfig_destroy(ar_config);
++	if (configure_status != AR_SUCCESS) {
++		ALOGE("ARCorePlugin: ArSession_configure failed (%d)", (int)configure_status);
++	}
  }
 diff --git a/plugin/src/main/cpp/arcore_interface.h b/plugin/src/main/cpp/arcore_interface.h
-index 04937c6..b30b33a 100644
+index 04937c6..5b494cf 100644
 --- a/plugin/src/main/cpp/arcore_interface.h
 +++ b/plugin/src/main/cpp/arcore_interface.h
 @@ -11,6 +11,8 @@
@@ -497,12 +581,22 @@ index 04937c6..b30b33a 100644
  	float getNear() { return m_z_near; }
  	float getFar() { return m_z_far; }
  
-@@ -133,6 +151,18 @@ private:
+@@ -133,6 +151,28 @@ private:
  
  	void configureSession();
  
 +	std::map<int64_t, ArAnchor *> m_anchors;
 +	int32_t m_last_camera_state = -1; // ArTrackingState, -1 before the first frame
++	int32_t m_last_resume_status = 1; // ArStatus of the last ArSession_resume (1 = never called)
++	int32_t m_last_configure_status = 1; // ArStatus of the last ArSession_configure
++	int32_t m_last_point_cloud_status = 0; // ArStatus of the last ArFrame_acquirePointCloud
++	int64_t m_last_frame_timestamp = 0; // ArFrame_getTimestamp, ns
++	int64_t m_timestamp_changes = 0; // frames whose camera timestamp advanced
++	int64_t m_tracking_frames = 0; // frames with the camera TRACKING
++	int64_t m_resume_retries = 0;
++	int32_t m_display_width = 0;
++	int32_t m_display_height = 0;
++	godot::Vector3 m_last_camera_position;
 +	int32_t m_last_failure_reason = 0; // ArTrackingFailureReason
 +	int32_t m_last_update_status = 0; // ArStatus of the last ArSession_update
 +	int64_t m_frames_updated = 0;
@@ -516,3 +610,41 @@ index 04937c6..b30b33a 100644
  	void handleScreenOrientationChange();
  
  	void estimateLight();
+diff --git a/plugin/src/main/java/org/godotengine/plugin/android/arcore/ARCorePlugin.kt b/plugin/src/main/java/org/godotengine/plugin/android/arcore/ARCorePlugin.kt
+index f2d1c3d..51ae5cf 100644
+--- a/plugin/src/main/java/org/godotengine/plugin/android/arcore/ARCorePlugin.kt
++++ b/plugin/src/main/java/org/godotengine/plugin/android/arcore/ARCorePlugin.kt
+@@ -2,6 +2,7 @@
+ package org.godotengine.plugin.android.arcore
+ 
+ import android.app.Activity
++import android.content.pm.ApplicationInfo
+ import android.content.pm.PackageManager
+ import android.util.Log
+ import android.view.View
+@@ -296,6 +297,25 @@ class ARCorePlugin(godot: Godot): GodotPlugin(godot) {
+ 
+     override fun getPluginGDExtensionLibrariesPaths() = setOf("res://addons/${BuildConfig.GODOT_PLUGIN_NAME}/plugin.gdextension")
+ 
++    // Diagnostics for the game's calibration screen.
++    @UsedByGodot
++    fun getArCoreVersion(): String {
++        return try {
++            activity?.packageManager?.getPackageInfo("com.google.ar.core", 0)?.versionName ?: ""
++        } catch (e: Exception) {
++            "not installed"
++        }
++    }
++
++    // Samsung + Google Play Services for AR 1.52+ track badly (no feature
++    // points, drifting anchors) in debuggable apps. Shown so a debug build
++    // on a phone is obvious.
++    @UsedByGodot
++    fun isAppDebuggable(): Boolean {
++        val info = activity?.applicationInfo ?: return false
++        return (info.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
++    }
++
+     @UsedByGodot
+     private external fun initializeEnvironment()
+ 

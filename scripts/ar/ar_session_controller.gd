@@ -61,6 +61,9 @@ var gameplay_hud: CanvasLayer
 ## Tests inject a fake bridge here; returns an ARCoreBridge.
 var bridge_factory: Callable = Callable()
 var tracking_info: Dictionary = {}
+## True while a "Place in front of me" board is held camera-relative because
+## ARCore was not tracking yet; it becomes a world anchor once tracking holds.
+var front_follow: bool = false
 
 var _adjusting: bool = false
 var _start_elapsed: float = 0.0
@@ -223,6 +226,7 @@ func fall_back(reason: String) -> void:
 	if mode != Mode.AR:
 		return
 	fallback_reason = reason
+	front_follow = false
 	if anchors != null:
 		anchors.clear()
 	bridge.stop(get_viewport())
@@ -267,19 +271,43 @@ func place_at_reticle() -> bool:
 	return true
 
 
-## Fallback when no surface is found: anchor the board ~0.6 m in front of
-## and below the phone, level and facing the player.
+## Fallback when no surface is found: put the board ~0.6 m in front of and
+## below the phone, level and facing the player. With stable ARCore tracking
+## it is world-anchored at once; otherwise it is held camera-relative (so it
+## never slides away on a bad camera pose) and anchored once tracking holds.
 func place_in_front() -> bool:
 	if not is_ar() or phase == Phase.PLACED or xr_camera == null:
 		return false
-	var pose: Transform3D = front_pose(xr_camera.global_transform)
-	var origin_xform: Transform3D = xr_origin.global_transform if xr_origin != null else Transform3D.IDENTITY
-	if not anchors.place_at_pose(origin_xform.affine_inverse() * pose):
-		if hud != null:
-			hud.set_status("Can't place yet. %s" % CalibrationFlow.tracking_message(tracking_info))
-		return false
+	var pose: Transform3D = _front_local_pose()
+	if flow.tracking_stable() and anchors.place_at_pose(pose):
+		front_follow = false
+		flow.anchor_pending = false
+	else:
+		anchors.clear()
+		anchors.pose = AnchorService.upright(pose)
+		front_follow = true
+		flow.anchor_pending = true
 	_after_placed()
 	return true
+
+
+## front_pose() of the XR camera, in XROrigin3D space (what anchors use).
+func _front_local_pose() -> Transform3D:
+	var pose: Transform3D = front_pose(xr_camera.global_transform)
+	var origin_xform: Transform3D = xr_origin.global_transform if xr_origin != null else Transform3D.IDENTITY
+	return origin_xform.affine_inverse() * pose
+
+
+## Keep a camera-held board in front of the camera; anchor it in the world
+## as soon as ARCore has tracked continuously for a moment.
+func _update_front_follow() -> void:
+	anchors.pose = AnchorService.upright(_front_local_pose())
+	if flow.tracking_stable() and anchors.place_at_pose(anchors.pose):
+		front_follow = false
+		flow.anchor_pending = false
+		if hud != null:
+			hud.apply_flow(flow)
+	_apply_transforms()
 
 
 ## World pose FRONT_PLACE_DISTANCE ahead of (and FRONT_PLACE_DROP below) a
@@ -315,6 +343,7 @@ func _after_placed() -> void:
 func begin_replace() -> void:
 	if not is_ar():
 		return
+	front_follow = false
 	anchors.clear()
 	phase = Phase.SEARCHING
 	placement.locked = false
@@ -392,12 +421,15 @@ func _process(delta: float) -> void:
 			fall_back("ARCore session did not start.")
 		return
 	_start_elapsed = 0.0
+	_diag_elapsed += delta
+	var refresh: bool = _diag_elapsed >= DIAG_INTERVAL
+	if refresh:
+		_diag_elapsed = 0.0
+		tracking_info = bridge.diagnostics()
+		if hud != null:
+			var forced: bool = bool(tracking_info.get("debuggable", false)) or flow.offers_fallback() or front_follow
+			hud.set_debug_text(CalibrationFlow.debug_line(tracking_info), forced)
 	if phase != Phase.PLACED:
-		_diag_elapsed += delta
-		var refresh: bool = _diag_elapsed >= DIAG_INTERVAL
-		if refresh:
-			_diag_elapsed = 0.0
-			tracking_info = bridge.tracking_info()
 		var found: bool = _update_reticle()
 		flow.update(delta, tracking_info, found)
 		if refresh:
@@ -405,8 +437,12 @@ func _process(delta: float) -> void:
 		if hud != null:
 			hud.apply_flow(flow)
 		return
-	anchors.poll()
-	_apply_transforms()
+	flow.observe(delta, tracking_info)
+	if front_follow:
+		_update_front_follow()
+	else:
+		anchors.poll()
+		_apply_transforms()
 	_drive_tier()
 
 

@@ -33,16 +33,39 @@ var step: Step = Step.SCANNING
 ## Seconds spent scanning (SCANNING or SURFACE_FOUND) since the last (re)start.
 var scan_seconds: float = 0.0
 var last_info: Dictionary = {}
+## Seconds the camera has reported TRACKING without a break.
+var tracking_seconds: float = 0.0
+## The board was placed in front of the camera before ARCore tracked; it
+## follows the camera until tracking is stable, then becomes a world anchor.
+var anchor_pending: bool = false
+
+## Continuous TRACKING needed before a camera-held board is anchored.
+const STABLE_TRACKING_SECONDS: float = 1.0
 
 
 func restart() -> void:
 	step = Step.SCANNING
 	scan_seconds = 0.0
+	anchor_pending = false
+
+
+## Record the latest tracking diagnostics (call every frame in any step).
+func observe(delta: float, info: Dictionary) -> void:
+	last_info = info
+	if int(info.get("camera_state", -1)) == CAMERA_TRACKING and int(info.get("frames", 0)) > 0:
+		tracking_seconds += maxf(0.0, delta)
+	else:
+		tracking_seconds = 0.0
+
+
+## True once tracking has held long enough to trust a world anchor.
+func tracking_stable() -> bool:
+	return tracking_seconds >= STABLE_TRACKING_SECONDS
 
 
 ## Advance one frame. `surface_found` is the reticle hit test result.
 func update(delta: float, info: Dictionary, surface_found: bool) -> void:
-	last_info = info
+	observe(delta, info)
 	if step == Step.SCANNING or step == Step.SURFACE_FOUND:
 		scan_seconds += maxf(0.0, delta)
 		step = Step.SURFACE_FOUND if surface_found else Step.SCANNING
@@ -111,6 +134,8 @@ func message() -> String:
 		Step.SURFACE_FOUND:
 			return "Surface found. Tap Place board, or tap the screen."
 		Step.ADJUSTING:
+			if anchor_pending:
+				return "Holding the board in front of you until AR tracking starts. Move the phone slowly; you can Lock and play now."
 			return "Drag to move, pinch to resize, twist to rotate. Tap Lock to start playing."
 		_:
 			return "Walk closer to zoom in. Tap units to select, tap the ground to move."
@@ -140,3 +165,41 @@ static func tracking_message(info: Dictionary) -> String:
 			return "AR is recovering. Hold the phone steady for a moment."
 		_:
 			return "Getting started: move the phone slowly side to side."
+
+
+const _STATE_NAMES: Dictionary = {-1: "none", 0: "TRACKING", 1: "PAUSED", 2: "STOPPED"}
+const _REASON_NAMES: Dictionary = {0: "none", 1: "bad state", 2: "low light", 3: "fast motion", 4: "few features", 5: "camera unavailable"}
+
+
+## One compact diagnostics line for the on-screen AR debug overlay.
+static func debug_line(diag: Dictionary) -> String:
+	if diag.is_empty():
+		return "AR debug: no data from the ARCore plugin"
+	var yes_no: Callable = func(key: String) -> String:
+		return "Y" if bool(diag.get(key, false)) else "N"
+	var state: int = int(diag.get("camera_state", -1))
+	var parts: PackedStringArray = [
+		"init %s" % yes_no.call("initialized"),
+		"primary %s" % yes_no.call("is_primary"),
+		"xr %s" % yes_no.call("use_xr"),
+		"resume %d" % int(diag.get("resume_status", 1)),
+		"cfg %d" % int(diag.get("configure_status", 1)),
+		"update %d (%d ok / %d err)" % [int(diag.get("update_status", 0)), int(diag.get("frames", 0)), int(diag.get("update_errors", 0))],
+		"cam %s/%s" % [_STATE_NAMES.get(state, str(state)), _REASON_NAMES.get(int(diag.get("failure_reason", 0)), "?")],
+		"tracked %d" % int(diag.get("tracking_frames", 0)),
+		"new frames %d" % int(diag.get("timestamp_changes", 0)),
+		"pts %d (pc %d)" % [int(diag.get("points", 0)), int(diag.get("point_cloud_status", 0))],
+		"planes %d/%d" % [int(diag.get("upward_planes", 0)), int(diag.get("planes_any_state", 0))],
+		"tex %d" % int(diag.get("texture_id", 0)),
+	]
+	var pos: Variant = diag.get("camera_position", null)
+	if pos is Vector3:
+		var p: Vector3 = pos as Vector3
+		parts.append("pos %.2f,%.2f,%.2f" % [p.x, p.y, p.z])
+	var display: Variant = diag.get("display", null)
+	if display is Vector2i:
+		parts.append("disp %dx%d" % [(display as Vector2i).x, (display as Vector2i).y])
+	if diag.has("arcore_version"):
+		parts.append("ARCore %s" % str(diag["arcore_version"]))
+	parts.append("debuggable %s" % yes_no.call("debuggable"))
+	return "AR debug · " + " · ".join(parts)

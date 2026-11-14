@@ -412,6 +412,26 @@ func _test_calibration_flow() -> void:
 	))
 	flow.restart()
 	_check("calibration: re-place restarts scanning", flow.step == CalibrationFlow.Step.SCANNING and flow.scan_seconds == 0.0)
+	var track := CalibrationFlow.new()
+	track.observe(0.6, {"camera_state": 0, "frames": 3})
+	track.observe(0.6, {"camera_state": 1, "frames": 4})
+	track.observe(0.6, {"camera_state": 0, "frames": 5})
+	_check("calibration: a tracking dropout resets the stable-tracking timer", not track.tracking_stable())
+	track.observe(0.5, {"camera_state": 0, "frames": 6})
+	_check("calibration: a second of continuous tracking counts as stable", track.tracking_stable())
+	var line: String = CalibrationFlow.debug_line({
+		"initialized": true, "is_primary": true, "use_xr": true, "resume_status": 0, "configure_status": 0,
+		"update_status": 0, "frames": 120, "update_errors": 0, "camera_state": 1, "failure_reason": 4,
+		"tracking_frames": 0, "timestamp_changes": 118, "points": 0, "point_cloud_status": 0,
+		"upward_planes": 0, "planes_any_state": 0, "texture_id": 7, "debuggable": true, "arcore_version": "1.53",
+	})
+	_check("calibration: the debug line names every pipeline stage", (
+		line.contains("init Y") and line.contains("primary Y") and line.contains("resume 0")
+		and line.contains("update 0 (120 ok / 0 err)") and line.contains("cam PAUSED/few features")
+		and line.contains("new frames 118") and line.contains("pts 0") and line.contains("debuggable Y")
+		and line.contains("ARCore 1.53")
+	))
+	_check("calibration: the debug line copes with an unpatched plugin", CalibrationFlow.debug_line({}).contains("no data"))
 
 
 func _test_front_pose_and_surface_mesh() -> void:
@@ -463,17 +483,49 @@ func _test_ar_calibration_controller() -> void:
 		ar.flow.step == CalibrationFlow.Step.SCANNING and ar.hud.sweep_hint.visible
 		and ar.hud.stats_label.text.contains("64")
 	))
+	_check("ar calibration: the debug line is hidden until asked for", (
+		not ar.hud.debug_requested and not ar.hud.register_panel_tap(0.0)
+	))
+	for i: int in 4:
+		ar.hud.register_panel_tap(0.1 * float(i + 1))
+	_check("ar calibration: five taps on the step panel toggle the debug line", ar.hud.debug_requested)
+	for i: int in 5:
+		ar.hud.register_panel_tap(5.0 + 0.1 * float(i))
+	_check("ar calibration: five more taps hide it again", not ar.hud.debug_requested)
 	ar.flow.scan_seconds = CalibrationFlow.FALLBACK_OFFER_SECONDS + 1.0
 	await get_tree().process_frame
 	await get_tree().process_frame
 	_check("ar calibration: the fallback buttons appear after the timeout", (
 		ar.hud.place_in_front_button.visible and ar.hud.play_without_ar_button.visible
 	))
-	fake.info = {"camera_state": 1, "failure_reason": 2, "frames": 30, "points": 0}
-	ar.tracking_info = fake.info
-	_check("ar calibration: place in front refuses while tracking is lost", not ar.place_in_front() and not ar.is_placed())
+	fake.info = {"camera_state": 1, "failure_reason": 0, "frames": 30, "points": 0}
+	await get_tree().create_timer(0.3).timeout
+	_check("ar calibration: place in front works before tracking, held camera-relative", (
+		ar.place_in_front() and ar.is_placed() and ar.front_follow and fake.anchors_made == 0
+		and ar.flow.anchor_pending and ar.hud.status_label.text.begins_with("Holding the board")
+	))
+	ar.xr_camera.position = Vector3(0.4, 0.0, 0.0)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	_check("ar calibration: the camera-held board follows the camera instead of sliding away", (
+		absf(ar.world_anchor.global_position.x - 0.4) < 0.01
+		and absf(ar.world_anchor.global_position.z + ARSessionController.FRONT_PLACE_DISTANCE) < 0.01
+	))
 	fake.info = {"camera_state": 0, "failure_reason": 0, "frames": 30, "points": 64}
-	_check("ar calibration: place in front anchors the board", ar.place_in_front() and ar.is_placed() and fake.anchors_made == 1)
+	await get_tree().create_timer(0.5).timeout
+	_check("ar calibration: brief tracking is not trusted for the anchor yet", ar.front_follow and fake.anchors_made == 0)
+	await get_tree().create_timer(1.0).timeout
+	_check("ar calibration: stable tracking converts the held board to a world anchor", (
+		not ar.front_follow and fake.anchors_made == 1 and not ar.flow.anchor_pending
+	))
+	var anchored_at: Vector3 = ar.world_anchor.global_position
+	ar.xr_camera.position = Vector3(-0.5, 0.0, 0.3)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	_check("ar calibration: once anchored the board stays put when the camera moves", _near(ar.world_anchor.global_position, anchored_at, 0.001))
+	_check("ar calibration: the debug line reports the tracking diagnostics", (
+		ar.hud.debug_label.text.contains("cam TRACKING") and ar.hud.debug_label.text.contains("pts 64")
+	))
 	_check("ar calibration: adjusting keeps the sim paused and shows Lock", (
 		ar.flow.step == CalibrationFlow.Step.ADJUSTING and not GameState.is_simulation_running
 		and ar.hud.lock_button.visible and not hud.visible

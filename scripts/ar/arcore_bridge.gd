@@ -29,6 +29,9 @@ var interface: XRInterface
 var failure_reason: String = ""
 var _plugin: Object
 var _added_interface: bool = false
+var _viewport: Viewport
+var _arcore_version: String = ""
+var _debuggable: int = -1
 
 
 ## True when the app may use the camera. ARCore cannot create a session
@@ -79,7 +82,12 @@ func start(viewport: Viewport) -> bool:
 	if interface.has_method("set_plane_rendering"):
 		# The game draws its own surface overlay during calibration.
 		interface.call("set_plane_rendering", false)
+	# The plugin makes itself primary in initialize(); make sure, since the
+	# XR camera only follows the primary interface.
+	if XRServer.primary_interface != interface:
+		XRServer.primary_interface = interface
 	viewport.use_xr = true
+	_viewport = viewport
 	return true
 
 
@@ -102,6 +110,27 @@ func tracking_info() -> Dictionary:
 	if not is_running() or not interface.has_method("get_tracking_info"):
 		return {}
 	return interface.call("get_tracking_info") as Dictionary
+
+
+## tracking_info() plus app-level checks for the on-screen debug line:
+## is_primary, use_xr, arcore_version, debuggable.
+func diagnostics() -> Dictionary:
+	var out: Dictionary = tracking_info().duplicate()
+	out["is_primary"] = interface != null and XRServer.primary_interface == interface
+	out["use_xr"] = _viewport != null and _viewport.use_xr
+	if _plugin != null:
+		# Plugin singletons (JNISingleton) do not report Java methods through
+		# has_method(), so call directly; an older plugin just returns null.
+		if _arcore_version.is_empty():
+			var version: Variant = _plugin.call("getArCoreVersion")
+			_arcore_version = "?" if version == null else str(version)
+		if _debuggable < 0:
+			var debuggable: Variant = _plugin.call("isAppDebuggable")
+			_debuggable = (1 if bool(debuggable) else 0) if debuggable != null else (1 if OS.is_debug_build() else 0)
+	if not _arcore_version.is_empty():
+		out["arcore_version"] = _arcore_version
+	out["debuggable"] = _debuggable == 1 if _debuggable >= 0 else OS.is_debug_build()
+	return out
 
 
 ## Tracked upward-facing planes: [{pose: Transform3D, polygon: PackedVector2Array}].
