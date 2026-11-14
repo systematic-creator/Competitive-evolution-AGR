@@ -1,19 +1,21 @@
 class_name UnitView
 extends CharacterBody3D
-## Visual unit driven by NavigationAgent3D toward the sim destination.
+## Visual unit. A pure follower of the simulation, in DIORAMA-LOCAL space:
+## `position` (relative to the diorama's Entities node) tracks `SimUnit.position`
+## and never writes back to the sim. The diorama can therefore sit under any
+## AR anchor pose / scale without changing what the sim sees.
+
+const HOVER: Vector3 = Vector3(0.0, 0.02, 0.0)
+const FOLLOW_SHARPNESS: float = 8.0
+const COMBAT_FOLLOW_SHARPNESS: float = 12.0
 
 var unit_id: int = 0
-var agent: NavigationAgent3D
 var _slot: Node3D
 var _selected: bool = false
+var _last_local: Vector3 = Vector3.ZERO
 
 
 func _ready() -> void:
-	agent = NavigationAgent3D.new()
-	agent.path_desired_distance = 0.02
-	agent.target_desired_distance = 0.02
-	agent.avoidance_enabled = false
-	add_child(agent)
 	_slot = Node3D.new()
 	add_child(_slot)
 	var col := CollisionShape3D.new()
@@ -24,18 +26,20 @@ func _ready() -> void:
 	col.position = Vector3(0.0, 0.02, 0.0)
 	add_child(col)
 	EventBus.era_changed.connect(_on_era_changed)
-	EventBus.unit_destination_set.connect(_on_destination)
 	EventBus.skirmish_unit_damaged.connect(_on_skirmish_damaged)
 	set_physics_process(true)
 
 
 func bind(unit: SimUnit, era: EraData) -> void:
 	unit_id = unit.id
-	global_position = unit.position + Vector3(0.0, 0.02, 0.0)
-	unit.view_attached = true
+	position = local_target(unit)
+	_last_local = position
 	_refresh_mesh(unit, era)
-	if unit.has_destination:
-		agent.target_position = unit.destination
+
+
+## Diorama-local position this view should sit at for `unit`.
+static func local_target(unit: SimUnit) -> Vector3:
+	return unit.position + HOVER
 
 
 func set_selected(flag: bool) -> void:
@@ -59,28 +63,17 @@ func _physics_process(delta: float) -> void:
 	if unit == null:
 		queue_free()
 		return
+	var sharpness: float = COMBAT_FOLLOW_SHARPNESS if unit.in_combat else FOLLOW_SHARPNESS
+	var weight: float = clampf(delta * sharpness, 0.0, 1.0)
+	position = position.lerp(local_target(unit), weight)
 	if unit.in_combat:
-		# SkirmishCombat owns the position during a Tier 4 fight; just follow it.
-		var weight: float = clampf(delta * 12.0, 0.0, 1.0)
-		global_position = global_position.lerp(unit.position + Vector3(0.0, 0.02, 0.0), weight)
 		rotation.y = lerp_angle(rotation.y, unit.facing, weight)
-		return
-	if unit.has_destination:
-		agent.target_position = unit.destination
-		if not agent.is_navigation_finished():
-			var next: Vector3 = agent.get_next_path_position()
-			var offset: Vector3 = next - global_position
-			offset.y = 0.0
-			if offset.length() > 0.0001:
-				velocity = offset.normalized() * unit.speed
-				look_at(global_position + offset, Vector3.UP)
-				move_and_slide()
-			unit.position = Vector3(global_position.x, 0.0, global_position.z)
-		else:
-			unit.position = unit.destination
-			global_position = unit.destination + Vector3(0.0, 0.02, 0.0)
 	else:
-		global_position = global_position.lerp(unit.position + Vector3(0.0, 0.02, 0.0), clampf(delta * 8.0, 0.0, 1.0))
+		var moved: Vector3 = position - _last_local
+		moved.y = 0.0
+		if moved.length() > 0.0005:
+			rotation.y = lerp_angle(rotation.y, SkirmishCombat.yaw_for_direction(moved), weight)
+	_last_local = position
 
 
 func _on_skirmish_damaged(_skirmish_id: int, id: int, _hp: int, _max_hp: int) -> void:
@@ -89,11 +82,6 @@ func _on_skirmish_damaged(_skirmish_id: int, id: int, _hp: int, _max_hp: int) ->
 	_slot.scale = Vector3.ONE * 1.35
 	var tween: Tween = create_tween()
 	tween.tween_property(_slot, "scale", Vector3.ONE, 0.18)
-
-
-func _on_destination(id: int, destination: Vector3) -> void:
-	if id == unit_id:
-		agent.target_position = destination
 
 
 func _on_era_changed(faction_id: StringName, new_era: EraData, _prev: EraData) -> void:

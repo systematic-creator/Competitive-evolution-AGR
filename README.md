@@ -16,6 +16,14 @@ This repository also includes a **desktop concept build**: a full orbit globe, o
     - **Space** pauses or resumes the simulation.
     - **Skirmish possession (Tier 4):** with a soldier standing in an enemy-held hex of a revealed rare node, press **Contest (possess)**. You take over one squad member behind a SpringArm3D camera. **WASD** / arrows or the on-screen joystick move (camera-relative), **F** / **J** or the Attack button strike, **Q** / **E** or a drag on empty screen turn the camera, **Esc** or Auto-resolve falls back to auto-battle. The strategic clock is held while you fight; it resumes when the skirmish is resolved.
 
+## Phone AR (Android, ARCore)
+
+The **Android AR** preset builds a world-locked AR version: the diorama is
+anchored to a real table, you walk around it, and stepping closer zooms in.
+See TESTING.md for building the patched ARCore plugin
+(`tools/arcore_plugin/`). Without ARCore, the same project falls back to the
+desktop camera.
+
 ## Headless tests
 
 ```bash

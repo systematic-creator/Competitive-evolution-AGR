@@ -8,7 +8,14 @@ var diorama: FlatDiorama
 var hud: DesktopHud
 var rts: RtsController
 var skirmish: SkirmishPossessionController
+## World-locked AR (or the desktop fallback when ARCore is unavailable).
+var ar: ARSessionController
+## WorldAnchor: follows the AR anchor pose (identity on desktop).
 var _anchor: Node3D
+## DioramaPivot: player placement (offset / yaw / scale / magnify) under the
+## anchor. The globe and diorama live below it in their own local space.
+var _pivot: Node3D
+var _environment: Environment
 
 
 func _ready() -> void:
@@ -16,13 +23,16 @@ func _ready() -> void:
 	_anchor = Node3D.new()
 	_anchor.name = "WorldAnchor"
 	add_child(_anchor)
+	_pivot = Node3D.new()
+	_pivot.name = "DioramaPivot"
+	_anchor.add_child(_pivot)
 	globe = OrbitGlobe.new()
 	globe.name = "OrbitGlobe"
-	_anchor.add_child(globe)
+	_pivot.add_child(globe)
 	diorama = FlatDiorama.new()
 	diorama.name = "FlatDiorama"
 	diorama.visible = false
-	_anchor.add_child(diorama)
+	_pivot.add_child(diorama)
 	rig = DesktopRig.new()
 	rig.name = "DesktopRig"
 	_anchor.add_child(rig)
@@ -46,6 +56,11 @@ func _ready() -> void:
 	GameState.start_simulation()
 	rts.camera = rig.camera
 	rts.hud = hud
+	rts.diorama = diorama
+	ar = ARSessionController.new()
+	ar.name = "ARSession"
+	add_child(ar)
+	ar.setup(_anchor, _pivot, rig, third, rts, _environment)
 	hud._refresh()
 	EventBus.region_selected.connect(_on_region_selected)
 	EventBus.zoom_tier_changed.connect(_on_tier)
@@ -65,6 +80,7 @@ func _setup_environment() -> void:
 	environment.ambient_light_color = Color(0.45, 0.5, 0.55)
 	environment.ambient_light_energy = 0.7
 	env.environment = environment
+	_environment = environment
 	add_child(env)
 	var sun := DirectionalLight3D.new()
 	sun.rotation_degrees = Vector3(-50.0, 40.0, 0.0)
@@ -121,6 +137,8 @@ func _on_possessed(unit: Node3D) -> void:
 func _on_released() -> void:
 	third.detach()
 	rig.third_person = false
+	if ar != null and ar.is_ar():
+		return  # ARSessionController restores the XR camera.
 	rig.camera.current = true
 	rts.camera = rig.camera
 	rig.request_distance(0.4)

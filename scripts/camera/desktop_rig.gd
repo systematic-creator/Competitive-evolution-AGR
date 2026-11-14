@@ -15,6 +15,9 @@ var _target_distance: float = 1.7
 var auto_zoom_to: float = -1.0
 var third_person: bool = false
 var frozen: bool = false
+## In AR the phone's real pose is the camera: this rig neither renders,
+## takes input, nor drives the zoom tier.
+var ar_mode: bool = false
 ## Touch stand-in for the scroll wheel / middle drag (mobile builds only):
 ## pinch = distance, one-finger drag = orbit.
 var touch_enabled: bool = OS.has_feature("mobile")
@@ -34,6 +37,8 @@ func _ready() -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	if ar_mode:
+		return
 	if third_person:
 		_touches.clear()
 		_pinch_last = -1.0
@@ -56,6 +61,8 @@ func _unhandled_input(event: InputEvent) -> void:
 
 
 func _process(delta: float) -> void:
+	if ar_mode:
+		return
 	if third_person or frozen:
 		_apply_transform()
 		return

@@ -3,7 +3,7 @@
 ## 1. Engine & Target Specs
 * **Engine:** Godot 4.3+ (Forward+ or Mobile Renderer). The desktop concept build uses the Compatibility renderer when captured in CI (`--rendering-method gl_compatibility`).
 * **Language:** Strictly typed GDScript 2.0 (`class_name`, static typing on all variables/functions)
-* **AR Backend:** Godot OpenXR Vendors Plugin (ARCore for Android / ARKit for iOS) with Passthrough enabled. **OpenXR stays disabled** (`xr/openxr/enabled=false`) until a dedicated AR export is wired up.
+* **AR Backend (Android):** the GodotVR `godot_arcore` GDExtension plugin, patched with horizontal-plane hit tests and ARCore anchors (`tools/arcore_plugin/`), shipped in a Gradle build. (The OpenXR Vendors plugin targets headsets, not phone AR, so **OpenXR stays disabled**.) iOS/ARKit is not covered.
 * **World Scale:** 1 Godot Unit = 1 Meter in real-world AR space (and in the desktop stand-in).
 
 ## 2. Core Design Rules for AI Generation
@@ -35,7 +35,7 @@ res://
 │   ├── ui/                   # Desktop HUD (stand-in for spatial / touch UI)
 │   └── debug/                # smoke_test.tscn, sim_tests.tscn
 └── scripts/
-    ├── ar/                   # Plane detection, anchor placement, pinch-to-scale (future)
+    ├── ar/                   # ARSessionController, AnchorService, DioramaPlacement, ARCoreBridge, gestures, ARHud
     ├── camera/               # ZoomTierController, DesktopRig, ThirdPersonRig
     ├── desktop/              # MainDesktop, RtsController, SkirmishPossessionController
     ├── entities/             # BuildingView, UnitView
@@ -111,4 +111,13 @@ res://
 * **Orders:** `possess_skirmish_unit`, `steer_possessed` (16 quantized sectors, sent only on change), `possessed_attack`, `resolve_skirmish_possessed` (after `skirmish_combat_finished`) and `resolve_skirmish_auto` (fallback at any time). The controller defers its reactions to sim signals so orders land between combat steps.
 * **Views:** `UnitView` follows `SimUnit.position` / `facing` while `in_combat` (navigation stands down). `ThirdPersonRig` (SpringArm3D) excludes the possessed body from boom collision, and its yaw is driven by the controller so movement is camera-relative. `SkirmishTouchControls` provides the `VirtualJoystick`, Attack and Auto-resolve buttons; desktop uses WASD, F / J, Q / E and Esc.
 * **Signals:** `skirmish_possession_started`, `skirmish_combat_stepped`, `skirmish_unit_damaged`, `skirmish_combat_finished`, `skirmish_possession_ended`, `unit_killed`.
+
+## 11. World-locked phone AR (Android)
+* **Hierarchy:** `WorldAnchor` (anchor pose, yaw only) → `DioramaPivot` (player placement) → `OrbitGlobe` + `FlatDiorama`. `XROrigin3D` / `XRCamera3D` are created next to it in AR mode only.
+* **Diorama-local space is the contract.** `SimUnit` / `SimBuilding` / node positions are diorama-local. Views set local `position` and never write back to the sim (`UnitView` is a pure follower; `view_attached` is no longer used). `RtsController` converts screen hits into diorama-local coordinates (`to_diorama_local`, ground plane = the diorama's local y = 0) before calling `CommandService`. Anchor pose, scale and magnify therefore never reach the simulation.
+* **Modes:** `ARSessionController.setup()` starts AR through `ARCoreBridge` when the plugin singleton and `ARCoreInterface` exist and the session starts. Otherwise (desktop, headless, the plain APK, unsupported phones, camera permission denied, or ARCore not starting within 6 s) it keeps the `DesktopRig` camera with an identity anchor and pivot, so the concept build is unchanged.
+* **Placement:** a reticle follows the nearest tracked upward-facing plane under the screen centre; a tap anchors the diorama there through `AnchorService.place_at_screen()` (an ARCore anchor attached to the plane). The anchor pose is polled every frame and kept upright.
+* **Lock / adjust:** unlocked, one-finger drag moves the diorama on the anchor plane, pinch scales it and twist rotates it. Locked, it is immovable and touches go to gameplay (`RtsController.touch_gate`). Offset, yaw, scale and the lock state persist in `user://ar_placement.cfg` (anchor-relative).
+* **Viewing:** the phone is the camera. The zoom tier comes from `distance(camera, pivot) / (scale × magnify)` against the existing thresholds. **Magnify** (pinch while locked with Magnify on) scales about the anchor without moving it. **Recenter** returns to the anchor and drops magnify; **Re-place** removes the anchor and starts placement again. Tier 4 turns XR rendering off and uses the third-person chase camera, then restores the AR camera on release.
+* **Multiplayer seam:** `AnchorService.host_anchor()` / `resolve_anchor(id)` and the `cloud_anchor_id` field form the hand-off for netcode. `share_payload()` is the Cloud Anchor ID plus the anchor-relative placement, with no unit or structure positions. `LocalAnchorBackend` provides an in-process loopback "cloud" for tests. The ARCore backend reports Cloud Anchors as not yet available (they need ARCore API authorization plus the async host/resolve calls in the plugin).
 

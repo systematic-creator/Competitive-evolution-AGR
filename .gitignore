@@ -11,3 +11,7 @@
 
 # Packaged test builds
 *.zip
+
+# ARCore plugin build outputs (tools/arcore_plugin/build_arcore_plugin.sh)
+/addons/ARCorePlugin/bin/
+/addons/ARCorePlugin/plugin.gdextension

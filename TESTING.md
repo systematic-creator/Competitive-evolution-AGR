@@ -44,12 +44,30 @@ to select it, then tap the ground or a resource node to move / gather. HUD
 buttons work as on desktop; Tier 4 possession uses the on-screen joystick
 and Attack / Auto-resolve buttons.
 
+## Android AR APK (ARCore, Gradle)
+
+1. Install an Android SDK with `platforms;android-33`, `platforms;android-34`,
+   `build-tools;33.0.2`, `build-tools;34.0.0`, `cmake;3.22.1` and
+   `ndk;23.2.8568313`, plus JDK 17 and `pip install scons`.
+2. Build and install the patched plugin:
+   `ANDROID_HOME=/path/to/sdk tools/arcore_plugin/build_arcore_plugin.sh`
+   (this creates `addons/ARCorePlugin/bin/` and `plugin.gdextension`).
+3. In the editor: Project → Install Android Build Template, then export the
+   **Android AR** preset (Gradle build, camera permission, minSdk 24).
+   After step 2, the plain **Android** preset no longer exports: a
+   GDExtension Android plugin needs a Gradle build.
+
+On the phone: move slowly until the ring reticle appears on a table, tap to
+place, adjust (drag / pinch / twist), press **Lock**, then walk closer to
+zoom from Orbit → Region → RTS.
+
 ## Headless tests
 
 ```bash
 godot --headless --path . --import
 godot --headless --path . res://scenes/debug/smoke_test.tscn   # 14 passed
 godot --headless --path . res://scenes/debug/sim_tests.tscn    # 165 passed
+godot --headless --path . res://scenes/debug/ar_tests.tscn     # 53 passed
 ```
 
 Both print `PASS` / `FAIL` lines and quit non-zero on failure when headless.
@@ -77,6 +95,16 @@ the same state hash, and the SkirmishPossessionController (ignores AI
 requests, possesses via CommandService, joystick -> steer sector, Attack ->
 strike, Auto-resolve, resolving a finished fight, falling back to
 auto-battle when no unit can be possessed).
+
+AR tests (`ar_tests.tscn`) cover: mode selection and the fallback camera
+loading when no XR interface is present (desktop rig current, no XR nodes,
+identity anchor/pivot), diorama-local transforms and the sim state hash
+staying unchanged when the anchor moves / scales / rotates / magnifies,
+world hits converting back to diorama-local orders, AnchorService placement,
+polling and tracking loss, the Cloud Anchor host/resolve stub (loopback
+backend) and the share payload, placement math (lock, clamps, magnify about
+the anchor, recenter, persistence), gestures (tap / drag / pinch / twist),
+and effective-distance zoom tiers.
 
 ## Before AR export (not needed for this concept)
 

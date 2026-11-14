@@ -4,6 +4,12 @@ extends Node
 
 var camera: Camera3D
 var hud: DesktopHud
+## The diorama root. Screen hits are converted into its LOCAL space before any
+## order is issued, so orders are independent of the AR anchor pose / scale.
+var diorama: Node3D
+## Optional gate (AR placement / unlocked adjust mode) that owns touch input.
+## Returns true when gameplay should NOT receive touches.
+var touch_gate: Callable
 ## Tier 4 skirmish possession owns P / Esc while a fight is live.
 var skirmish: SkirmishPossessionController
 var selected_unit_id: int = -1
@@ -42,6 +48,10 @@ func _unhandled_input(event: InputEvent) -> void:
 	if GameState.current_zoom_tier == GameState.ZoomTier.THIRD_PERSON:
 		return
 	if touch_enabled:
+		if touch_gate.is_valid() and bool(touch_gate.call()):
+			_touch_count = 0
+			_tap_valid = false
+			return
 		_handle_touch(event)
 		return
 	if not (event is InputEventMouseButton and event.pressed):
@@ -61,7 +71,7 @@ func _primary_at(screen: Vector2, is_tap: bool) -> void:
 	var hit: Dictionary = _ray(screen)
 	if hit.is_empty():
 		return
-	var point: Vector3 = hit["position"] as Vector3
+	var point: Vector3 = to_diorama_local(hit["position"] as Vector3)
 	if hud != null and hud.pending_build_type() != &"":
 		var cell: Vector2i = GameState.world.playable.world_to_cell(point)
 		GameState.commands.place_building(GameState.get_player_faction_id(), hud.pending_build_type(), cell)
@@ -81,7 +91,7 @@ func _order_at(screen: Vector2) -> void:
 	var hit: Dictionary = _ray(screen)
 	if hit.is_empty():
 		return
-	var point: Vector3 = hit["position"] as Vector3
+	var point: Vector3 = to_diorama_local(hit["position"] as Vector3)
 	var node: SimResourceNode = _node_near(point)
 	if node != null:
 		GameState.commands.assign_gather(selected_unit_id, node.node_id)
@@ -149,21 +159,35 @@ func _release() -> void:
 	EventBus.unit_released.emit()
 
 
+## World-space hit under `screen`: physics first, then the diorama's ground
+## plane (its local y = 0, wherever the anchor put it).
 func _ray(screen: Vector2) -> Dictionary:
 	var from: Vector3 = camera.project_ray_origin(screen)
-	var to: Vector3 = from + camera.project_ray_normal(screen) * 20.0
-	var params := PhysicsRayQueryParameters3D.create(from, to)
+	var direction: Vector3 = camera.project_ray_normal(screen)
+	var params := PhysicsRayQueryParameters3D.create(from, from + direction * 20.0)
 	var hit: Dictionary = camera.get_world_3d().direct_space_state.intersect_ray(params)
 	if not hit.is_empty():
 		return hit
-	# Plane fallback at y=0 so we can click the diorama without colliders.
-	var n: Vector3 = camera.project_ray_normal(screen)
-	if abs(n.y) < 0.0001:
+	var ground: Plane = diorama_ground_plane()
+	var point: Variant = ground.intersects_ray(from, direction)
+	if point == null:
 		return {}
-	var t: float = -from.y / n.y
-	if t <= 0.0:
-		return {}
-	return {"position": from + n * t}
+	return {"position": point as Vector3}
+
+
+func diorama_ground_plane() -> Plane:
+	if diorama == null or not diorama.is_inside_tree():
+		return Plane(Vector3.UP, 0.0)
+	var xform: Transform3D = diorama.global_transform
+	return Plane(xform.basis.y.normalized(), xform.origin)
+
+
+## World -> diorama-local. Identity when there is no diorama (tests, desktop).
+func to_diorama_local(world_point: Vector3) -> Vector3:
+	if diorama == null or not diorama.is_inside_tree():
+		return world_point
+	var local: Vector3 = diorama.to_local(world_point)
+	return Vector3(local.x, 0.0, local.z)
 
 
 func _unit_near(point: Vector3, faction_id: StringName) -> SimUnit:

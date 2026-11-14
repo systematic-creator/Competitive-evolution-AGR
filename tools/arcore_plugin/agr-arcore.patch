@@ -1,0 +1,276 @@
+diff --git a/plugin/src/main/cpp/arcore_anchors.cpp b/plugin/src/main/cpp/arcore_anchors.cpp
+new file mode 100644
+index 0000000..5f9f94b
+--- /dev/null
++++ b/plugin/src/main/cpp/arcore_anchors.cpp
+@@ -0,0 +1,200 @@
++// Competitive Evolution AGR additions to the GodotVR ARCore plugin:
++// horizontal-plane hit testing and ARCore anchors exposed to GDScript.
++// Licensed under the plugin's MIT license.
++
++#include "arcore_interface.h"
++#include "utils.h"
++
++#include <godot_cpp/classes/display_server.hpp>
++#include <godot_cpp/classes/xr_server.hpp>
++
++using namespace godot;
++
++Transform3D ARCoreInterface::ar_matrix_to_world(const float p_matrix[16]) const {
++	Transform3D pose = to_godot_transform(p_matrix);
++	XRServer *xr_server = XRServer::get_singleton();
++	if (xr_server == nullptr) {
++		return pose;
++	}
++	// Same mapping the camera uses in _get_camera_transform().
++	pose.origin *= xr_server->get_world_scale();
++	return xr_server->get_reference_frame() * pose;
++}
++
++ArPose *ARCoreInterface::world_to_new_ar_pose(const Transform3D &p_pose) const {
++	Transform3D local = p_pose;
++	XRServer *xr_server = XRServer::get_singleton();
++	if (xr_server != nullptr) {
++		local = xr_server->get_reference_frame().affine_inverse() * p_pose;
++		double scale = xr_server->get_world_scale();
++		if (scale > 0.0) {
++			local.origin /= scale;
++		}
++	}
++	Quaternion q = local.basis.orthonormalized().get_quaternion();
++	// ArPose raw layout: qx, qy, qz, qw, tx, ty, tz.
++	float raw[7] = { (float)q.x, (float)q.y, (float)q.z, (float)q.w,
++		(float)local.origin.x, (float)local.origin.y, (float)local.origin.z };
++	ArPose *pose = nullptr;
++	ArPose_create(m_ar_session, raw, &pose);
++	return pose;
++}
++
++bool ARCoreInterface::find_upward_plane_hit(float p_normalized_x, float p_normalized_y, ArHitResult *r_hit, ArPose *r_pose) {
++	if (m_init_status != INITIALISED || m_ar_session == nullptr || m_ar_frame == nullptr) {
++		return false;
++	}
++	Size2i window = DisplayServer::get_singleton()->window_get_size();
++	float px = p_normalized_x * (float)window.x;
++	float py = p_normalized_y * (float)window.y;
++
++	ArHitResultList *list = nullptr;
++	ArHitResultList_create(m_ar_session, &list);
++	ArFrame_hitTest(m_ar_session, m_ar_frame, px, py, list);
++
++	int32_t size = 0;
++	ArHitResultList_getSize(m_ar_session, list, &size);
++	bool found = false;
++	// Results are sorted by distance; take the nearest upward-facing plane.
++	for (int32_t i = 0; i < size && !found; ++i) {
++		ArHitResultList_getItem(m_ar_session, list, i, r_hit);
++		ArTrackable *trackable = nullptr;
++		ArHitResult_acquireTrackable(m_ar_session, r_hit, &trackable);
++		if (trackable == nullptr) {
++			continue;
++		}
++		ArTrackableType type = AR_TRACKABLE_NOT_VALID;
++		ArTrackable_getType(m_ar_session, trackable, &type);
++		if (type == AR_TRACKABLE_PLANE) {
++			ArPlane *plane = ArAsPlane(trackable);
++			ArHitResult_getHitPose(m_ar_session, r_hit, r_pose);
++			int32_t in_polygon = 0;
++			ArPlane_isPoseInPolygon(m_ar_session, plane, r_pose, &in_polygon);
++			ArPlaneType plane_type = AR_PLANE_VERTICAL;
++			ArPlane_getType(m_ar_session, plane, &plane_type);
++			ArTrackingState plane_state = AR_TRACKING_STATE_STOPPED;
++			ArTrackable_getTrackingState(m_ar_session, trackable, &plane_state);
++			found = in_polygon != 0 && plane_type == AR_PLANE_HORIZONTAL_UPWARD_FACING && plane_state == AR_TRACKING_STATE_TRACKING;
++		}
++		ArTrackable_release(trackable);
++	}
++	ArHitResultList_destroy(list);
++	return found;
++}
++
++Dictionary ARCoreInterface::hit_test_plane(float p_normalized_x, float p_normalized_y) {
++	Dictionary out;
++	out["hit"] = false;
++	if (m_ar_session == nullptr) {
++		return out;
++	}
++	ArHitResult *hit = nullptr;
++	ArHitResult_create(m_ar_session, &hit);
++	ArPose *pose = nullptr;
++	ArPose_create(m_ar_session, nullptr, &pose);
++	if (find_upward_plane_hit(p_normalized_x, p_normalized_y, hit, pose)) {
++		float matrix[16];
++		ArPose_getMatrix(m_ar_session, pose, matrix);
++		out["hit"] = true;
++		out["pose"] = ar_matrix_to_world(matrix);
++	}
++	ArPose_destroy(pose);
++	ArHitResult_destroy(hit);
++	return out;
++}
++
++Dictionary ARCoreInterface::create_anchor_at_screen(float p_normalized_x, float p_normalized_y) {
++	Dictionary out;
++	out["id"] = (int64_t)-1;
++	if (m_ar_session == nullptr) {
++		return out;
++	}
++	ArHitResult *hit = nullptr;
++	ArHitResult_create(m_ar_session, &hit);
++	ArPose *pose = nullptr;
++	ArPose_create(m_ar_session, nullptr, &pose);
++	if (find_upward_plane_hit(p_normalized_x, p_normalized_y, hit, pose)) {
++		// Anchoring through the hit attaches the anchor to the plane trackable,
++		// so ARCore keeps it fixed as its understanding of the plane improves.
++		ArAnchor *anchor = nullptr;
++		if (ArHitResult_acquireNewAnchor(m_ar_session, hit, &anchor) == AR_SUCCESS && anchor != nullptr) {
++			int64_t id = m_next_anchor_id++;
++			m_anchors[id] = anchor;
++			out["id"] = id;
++			out["pose"] = get_anchor_pose(id);
++		}
++	}
++	ArPose_destroy(pose);
++	ArHitResult_destroy(hit);
++	return out;
++}
++
++int64_t ARCoreInterface::create_anchor(const Transform3D &p_pose) {
++	if (m_init_status != INITIALISED || m_ar_session == nullptr) {
++		return -1;
++	}
++	ArPose *pose = world_to_new_ar_pose(p_pose);
++	ArAnchor *anchor = nullptr;
++	ArStatus status = ArSession_acquireNewAnchor(m_ar_session, pose, &anchor);
++	ArPose_destroy(pose);
++	if (status != AR_SUCCESS || anchor == nullptr) {
++		return -1;
++	}
++	int64_t id = m_next_anchor_id++;
++	m_anchors[id] = anchor;
++	return id;
++}
++
++Transform3D ARCoreInterface::get_anchor_pose(int64_t p_anchor_id) {
++	auto it = m_anchors.find(p_anchor_id);
++	if (it == m_anchors.end() || m_ar_session == nullptr) {
++		return Transform3D();
++	}
++	ArPose *pose = nullptr;
++	ArPose_create(m_ar_session, nullptr, &pose);
++	ArAnchor_getPose(m_ar_session, it->second, pose);
++	float matrix[16];
++	ArPose_getMatrix(m_ar_session, pose, matrix);
++	ArPose_destroy(pose);
++	return ar_matrix_to_world(matrix);
++}
++
++// 0 = tracking, 1 = paused, 2 = stopped, -1 = unknown anchor.
++int32_t ARCoreInterface::get_anchor_tracking_state(int64_t p_anchor_id) {
++	auto it = m_anchors.find(p_anchor_id);
++	if (it == m_anchors.end() || m_ar_session == nullptr) {
++		return -1;
++	}
++	ArTrackingState state = AR_TRACKING_STATE_STOPPED;
++	ArAnchor_getTrackingState(m_ar_session, it->second, &state);
++	switch (state) {
++		case AR_TRACKING_STATE_TRACKING:
++			return 0;
++		case AR_TRACKING_STATE_PAUSED:
++			return 1;
++		default:
++			return 2;
++	}
++}
++
++void ARCoreInterface::remove_anchor(int64_t p_anchor_id) {
++	auto it = m_anchors.find(p_anchor_id);
++	if (it == m_anchors.end()) {
++		return;
++	}
++	if (m_ar_session != nullptr) {
++		ArAnchor_detach(m_ar_session, it->second);
++	}
++	ArAnchor_release(it->second);
++	m_anchors.erase(it);
++}
++
++void ARCoreInterface::remove_all_anchors() {
++	for (auto &entry : m_anchors) {
++		if (m_ar_session != nullptr) {
++			ArAnchor_detach(m_ar_session, entry.second);
++		}
++		ArAnchor_release(entry.second);
++	}
++	m_anchors.clear();
++}
+diff --git a/plugin/src/main/cpp/arcore_interface.cpp b/plugin/src/main/cpp/arcore_interface.cpp
+index ac0c96c..5ba889c 100644
+--- a/plugin/src/main/cpp/arcore_interface.cpp
++++ b/plugin/src/main/cpp/arcore_interface.cpp
+@@ -30,6 +30,13 @@ void ARCoreInterface::_bind_methods() {
+ 	ClassDB::bind_method(D_METHOD("get_light_color_correction"), &ARCoreInterface::get_light_color_correction);
+ 	ClassDB::bind_method(D_METHOD("get_light_main_hdr_direction"), &ARCoreInterface::get_light_main_hdr_direction);
+ 	ClassDB::bind_method(D_METHOD("get_light_main_hdr_intensity"), &ARCoreInterface::get_light_main_hdr_intensity);
++	ClassDB::bind_method(D_METHOD("hit_test_plane", "normalized_x", "normalized_y"), &ARCoreInterface::hit_test_plane);
++	ClassDB::bind_method(D_METHOD("create_anchor_at_screen", "normalized_x", "normalized_y"), &ARCoreInterface::create_anchor_at_screen);
++	ClassDB::bind_method(D_METHOD("create_anchor", "pose"), &ARCoreInterface::create_anchor);
++	ClassDB::bind_method(D_METHOD("get_anchor_pose", "anchor_id"), &ARCoreInterface::get_anchor_pose);
++	ClassDB::bind_method(D_METHOD("get_anchor_tracking_state", "anchor_id"), &ARCoreInterface::get_anchor_tracking_state);
++	ClassDB::bind_method(D_METHOD("remove_anchor", "anchor_id"), &ARCoreInterface::remove_anchor);
++	ClassDB::bind_method(D_METHOD("remove_all_anchors"), &ARCoreInterface::remove_all_anchors);
+ 	ClassDB::bind_method(D_METHOD("getNear"), &ARCoreInterface::getNear);
+ 	ClassDB::bind_method(D_METHOD("getFar"), &ARCoreInterface::getFar);
+ }
+@@ -377,6 +384,7 @@ void ARCoreInterface::_uninitialize() {
+ 		ERR_FAIL_NULL(xr_server);
+ 
+ 		if (m_ar_session != nullptr) {
++			remove_all_anchors();
+ 			ArSession_destroy(m_ar_session);
+ 			ArFrame_destroy(m_ar_frame);
+ 
+diff --git a/plugin/src/main/cpp/arcore_interface.h b/plugin/src/main/cpp/arcore_interface.h
+index 04937c6..63e785f 100644
+--- a/plugin/src/main/cpp/arcore_interface.h
++++ b/plugin/src/main/cpp/arcore_interface.h
+@@ -11,6 +11,8 @@
+ #include "include/arcore_c_api.h"
+ #include <godot_cpp/classes/xr_interface_extension.hpp>
+ #include <godot_cpp/classes/xr_positional_tracker.hpp>
++#include <godot_cpp/variant/dictionary.hpp>
++#include <map>
+ 
+ #include "background_renderer.h"
+ #include "instances_renderer.h"
+@@ -87,6 +89,17 @@ public:
+ 	godot::Vector3 get_light_main_hdr_direction();
+ 	godot::Vector3 get_light_main_hdr_intensity();
+ 
++	// --- Competitive Evolution AGR additions: plane hit test + anchors ---
++	// Screen coordinates are normalized (0..1 of the window). Poses are in
++	// Godot world space (reference frame and world scale applied).
++	godot::Dictionary hit_test_plane(float p_normalized_x, float p_normalized_y);
++	godot::Dictionary create_anchor_at_screen(float p_normalized_x, float p_normalized_y);
++	int64_t create_anchor(const godot::Transform3D &p_pose);
++	godot::Transform3D get_anchor_pose(int64_t p_anchor_id);
++	int32_t get_anchor_tracking_state(int64_t p_anchor_id);
++	void remove_anchor(int64_t p_anchor_id);
++	void remove_all_anchors();
++
+ 	float getNear() { return m_z_near; }
+ 	float getFar() { return m_z_far; }
+ 
+@@ -133,6 +146,12 @@ private:
+ 
+ 	void configureSession();
+ 
++	std::map<int64_t, ArAnchor *> m_anchors;
++	int64_t m_next_anchor_id = 1;
++	godot::Transform3D ar_matrix_to_world(const float p_matrix[16]) const;
++	ArPose *world_to_new_ar_pose(const godot::Transform3D &p_pose) const;
++	bool find_upward_plane_hit(float p_normalized_x, float p_normalized_y, ArHitResult *r_hit, ArPose *r_pose);
++
+ 	void handleScreenOrientationChange();
+ 
+ 	void estimateLight();
