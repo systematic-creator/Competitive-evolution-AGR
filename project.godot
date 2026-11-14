@@ -13,7 +13,7 @@ config_version=5
 config/name="Competitive Evolution AGR"
 config/description="AR multi-scale competitive evolution strategy game."
 run/main_scene="res://scenes/main_desktop.tscn"
-config/features=PackedStringArray("4.3", "Mobile")
+config/features=PackedStringArray("4.4", "Mobile")
 
 [autoload]
 

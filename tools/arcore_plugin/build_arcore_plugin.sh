@@ -2,11 +2,17 @@
 # Build the patched GodotVR ARCore plugin and install it into
 # addons/ARCorePlugin/ (bin/ + plugin.gdextension).
 #
+# Godot 4.4+ only: upstream's camera passthrough uses CameraFeed.set_external()
+# and get_texture_tex_id(), which Godot 4.3 does not have.
+#
 # Requires: git, python3 + scons, JDK 17, and an Android SDK with
 #   platforms;android-33  build-tools;33.0.2  cmake;3.22.1  ndk;23.2.8568313
 # (sdkmanager "platforms;android-33" "build-tools;33.0.2" "cmake;3.22.1" "ndk;23.2.8568313")
 #
-# Usage: ANDROID_HOME=/path/to/sdk tools/arcore_plugin/build_arcore_plugin.sh
+# Usage: ANDROID_HOME=/path/to/sdk GODOT_BIN=/path/to/godot-4.4.x \
+#        tools/arcore_plugin/build_arcore_plugin.sh
+# GODOT_BIN (recommended) dumps the exact engine API that godot-cpp binds
+# against; without it, upstream's bundled 4.4-dev API file is used.
 set -euo pipefail
 
 UPSTREAM="https://github.com/GodotVR/godot_arcore.git"
@@ -36,9 +42,19 @@ else
 	echo "    patch already applied (or does not apply cleanly); continuing"
 fi
 
-echo "==> Building godot-cpp for Android arm64"
-(cd godot-cpp && scons platform=android arch=arm64 target=template_debug -j"$JOBS" \
-	&& scons platform=android arch=arm64 target=template_release -j"$JOBS")
+if [ -n "${GODOT_BIN:-}" ]; then
+	echo "==> Dumping the engine API from $GODOT_BIN"
+	mkdir -p "$WORK/api"
+	(cd "$WORK/api" && "$GODOT_BIN" --headless --dump-extension-api >/dev/null 2>&1)
+	API_FILE="$WORK/api/extension_api.json"
+else
+	API_FILE="$WORK/godot_arcore/thirdparty/godot_cpp_extension_api/extension_api.json"
+fi
+[ -f "$API_FILE" ] || { echo "missing engine API file: $API_FILE" >&2; exit 1; }
+
+echo "==> Building godot-cpp for Android arm64 against $API_FILE"
+(cd godot-cpp && scons platform=android arch=arm64 target=template_debug custom_api_file="$API_FILE" -j"$JOBS" \
+	&& scons platform=android arch=arm64 target=template_release custom_api_file="$API_FILE" -j"$JOBS")
 
 echo "==> Building the plugin AAR + GDExtension"
 echo "sdk.dir=$ANDROID_HOME" > local.properties
