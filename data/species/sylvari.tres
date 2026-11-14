@@ -1,0 +1,47 @@
+[gd_resource type="Resource" script_class="SpeciesData" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://resources/species_data.gd" id="1_sp"]
+
+[resource]
+script = ExtResource("1_sp")
+species_id = &"sylvari"
+display_name = "Sylvari"
+description = "Plant-like groves that expand slowly. Owned territory slowly regenerates resources, and defenses thicken the longer a cell is held."
+faction_color = Color(0.35, 0.72, 0.32, 1)
+era_display_names = PackedStringArray()
+traits = Array[StringName]([&"plantlike",
+&"rooted",
+&"regenerative"])
+starting_era_index = 0
+starting_resources = {
+&"food": 80,
+&"wood": 95,
+&"stone": 40
+}
+starting_unit_count = 3
+gather_rate_multiplier = 1.1
+build_speed_multiplier = 0.7
+research_speed_multiplier = 1.0
+unit_health_multiplier = 1.25
+unit_speed_multiplier = 0.8
+unit_cost_multiplier = 1.1
+era_cost_multiplier = 1.0
+train_speed_multiplier = 0.85
+territory_regen_per_tick = 6
+defense_hold_bonus_per_tick = 0.015
+max_hold_defense_bonus = 0.75
+industry_production_bonus = 0.0
+units_are_constructed = false
+ai_expand_weight = 0.45
+ai_military_weight = 0.65
+ai_economy_weight = 1.15
+ai_era_weight = 1.0
+ai_defense_weight = 1.7
+ai_water_preference = 0.15
+harvest_speed_multiplier = 1.0
+node_depletion_multiplier = 1.0
+can_build_extractors = false
+extractor_rare_yield_bonus = 0.0
+ai_rare_weight = 1.15
+ai_escalation_style = &"defensive"
+allowed_win_condition_ids = Array[StringName]([&"complete_domination", &"unbridgeable_superiority"])

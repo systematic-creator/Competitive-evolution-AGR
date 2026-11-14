@@ -1,0 +1,13 @@
+# Godot 4+
+.godot/
+*.translation
+
+# Exports
+/android/
+/build/
+*.apk
+*.aab
+*.ipa
+
+# Packaged test builds
+*.zip

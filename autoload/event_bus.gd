@@ -1,0 +1,170 @@
+extends Node
+## Global signal hub (autoload: `EventBus`).
+##
+## Simulation systems emit upward through these signals; visual nodes and UI
+## connect to them instead of polling. This script holds no state and no logic.
+##
+## Zoom tiers are passed as `int` values of `GameState.ZoomTier` so this script
+## has no parse-time dependency on other autoloads.
+
+# --- Eras -------------------------------------------------------------------
+
+## A faction advanced (or regressed) to a new era. Building/unit visuals swap
+## their meshes from `new_era` while keeping grid coordinates and HP.
+@warning_ignore("unused_signal")
+signal era_changed(faction_id: StringName, new_era: EraData, previous_era: EraData)
+
+# --- Camera / zoom ----------------------------------------------------------
+
+## The active zoom tier changed. Values are `GameState.ZoomTier`.
+@warning_ignore("unused_signal")
+signal zoom_tier_changed(new_tier: int, previous_tier: int)
+
+## Normalized progress (0.0 -> 1.0) of the ORBIT -> REGION crossfade.
+@warning_ignore("unused_signal")
+signal zoom_transition_progress(progress: float)
+
+# --- World / selection ------------------------------------------------------
+
+## A region pin on the orbit globe was tapped and locked on.
+@warning_ignore("unused_signal")
+signal region_selected(region_id: StringName)
+
+## The AR world anchor was placed (or re-placed) in physical space.
+@warning_ignore("unused_signal")
+signal world_anchor_placed(anchor_transform: Transform3D)
+
+# --- Simulation -------------------------------------------------------------
+
+## Fired once per global simulation tick by `GameState`.
+@warning_ignore("unused_signal")
+signal simulation_ticked(tick: int)
+
+## A faction joined the simulation.
+@warning_ignore("unused_signal")
+signal faction_registered(faction_id: StringName, species: SpeciesData)
+
+## A faction's stockpile of a resource changed.
+@warning_ignore("unused_signal")
+signal faction_resource_changed(faction_id: StringName, resource_id: StringName, amount: int)
+
+## A building was placed (possibly still under construction).
+@warning_ignore("unused_signal")
+signal building_placed(faction_id: StringName, building_id: int, building_type: StringName, grid_pos: Vector2i)
+
+## A building finished construction.
+@warning_ignore("unused_signal")
+signal building_constructed(faction_id: StringName, building_id: int, building_type: StringName, grid_pos: Vector2i)
+
+## A unit entered the simulation.
+@warning_ignore("unused_signal")
+signal unit_spawned(faction_id: StringName, unit_id: int, unit_type: StringName, position: Vector3)
+
+## A unit was ordered to a new destination (move or gather).
+@warning_ignore("unused_signal")
+signal unit_destination_set(unit_id: int, destination: Vector3)
+
+## The concept world finished bootstrapping (factions, region, starting units).
+@warning_ignore("unused_signal")
+signal world_bootstrapped()
+
+# --- Third-person -----------------------------------------------------------
+
+## The player possessed a unit (enter Tier 4). `unit` is the CharacterBody3D.
+@warning_ignore("unused_signal")
+signal unit_possessed(unit: Node3D)
+
+## The player released the possessed unit (return to RTS tier).
+@warning_ignore("unused_signal")
+signal unit_released()
+
+# --- Claims / skirmishes ----------------------------------------------------
+
+## A rare node was soft-claimed (territory) or hard-claimed (outpost).
+## `kind` is `&"soft"` or `&"hard"`.
+@warning_ignore("unused_signal")
+signal node_claimed(faction_id: StringName, node_id: StringName, kind: StringName)
+
+## A claim on a rare node was lost (`kind` is `&"soft"` or `&"hard"`).
+@warning_ignore("unused_signal")
+signal node_claim_lost(faction_id: StringName, node_id: StringName, kind: StringName)
+
+## A structure finished radiating a hard claim onto a rare node.
+@warning_ignore("unused_signal")
+signal outpost_established(faction_id: StringName, building_id: int, node_id: StringName, grid_pos: Vector2i)
+
+## A faction's structure claimed a hex (axial q, r packed as Vector2i).
+@warning_ignore("unused_signal")
+signal hex_claimed(faction_id: StringName, hex: Vector2i, building_id: int)
+
+## A structure's claim on a hex was released (destroyed, captured, or blocked).
+@warning_ignore("unused_signal")
+signal hex_claim_released(faction_id: StringName, hex: Vector2i, building_id: int)
+
+## A structure changed owners after a skirmish.
+@warning_ignore("unused_signal")
+signal structure_captured(building_id: int, previous_faction_id: StringName, new_faction_id: StringName)
+
+## A structure was destroyed and its hex claims released.
+@warning_ignore("unused_signal")
+signal structure_destroyed(building_id: int, faction_id: StringName, building_type: StringName, grid_pos: Vector2i)
+
+## A skirmish began over a specific hex in a rare-node cluster.
+@warning_ignore("unused_signal")
+signal skirmish_started(skirmish_id: int, attacker_id: StringName, defender_id: StringName, node_id: StringName, hex: Vector2i)
+
+## Auto-battle finished (or a pending possession skirmish was resolved).
+@warning_ignore("unused_signal")
+signal skirmish_resolved(skirmish_id: int, winner_id: StringName, loser_id: StringName, node_id: StringName, hex: Vector2i, captured_building_id: int, flipped: bool)
+
+## A skirmish was started with possession instead of auto-battle. The player's
+## SkirmishPossessionController answers with `CommandService.possess_skirmish_unit`
+## (or `resolve_skirmish_auto` as the fallback when no unit can be possessed).
+@warning_ignore("unused_signal")
+signal skirmish_possession_requested(skirmish_id: int, faction_id: StringName, node_id: StringName, hex: Vector2i)
+
+## The sim handed `unit_id` to the player and the live Tier 4 fight began
+## (also re-emitted when control moves to another squad member).
+@warning_ignore("unused_signal")
+signal skirmish_possession_started(skirmish_id: int, unit_id: int)
+
+## One fixed combat step of a live possession fight ran (`step` counts from 1).
+@warning_ignore("unused_signal")
+signal skirmish_combat_stepped(skirmish_id: int, step: int)
+
+## A combatant took damage in a live fight. `unit_id` -1 is the structure guard.
+@warning_ignore("unused_signal")
+signal skirmish_unit_damaged(skirmish_id: int, unit_id: int, hp: int, max_hp: int)
+
+## The live fight is over on the field. Settle it with
+## `CommandService.resolve_skirmish_possessed` (emits `skirmish_resolved`).
+@warning_ignore("unused_signal")
+signal skirmish_combat_finished(skirmish_id: int, winner_id: StringName)
+
+## A possession skirmish was resolved (field result or auto-battle fallback).
+@warning_ignore("unused_signal")
+signal skirmish_possession_ended(skirmish_id: int, winner_id: StringName)
+
+## A unit died and left the simulation.
+@warning_ignore("unused_signal")
+signal unit_killed(unit_id: int, faction_id: StringName)
+
+## Desktop HUD entered or left build/claim mode (hex overlay visibility).
+@warning_ignore("unused_signal")
+signal build_mode_changed(active: bool)
+
+# --- World era / victory ----------------------------------------------------
+
+## The shared world era advanced (soft cap). Species tracks stay independent.
+@warning_ignore("unused_signal")
+signal world_era_changed(world_era_index: int, new_era: EraData, previous_era: EraData)
+
+## Win-condition progress for a faction. `progress` is 0–1; `held` / `required`
+## are consecutive qualifying ticks.
+@warning_ignore("unused_signal")
+signal victory_progress(faction_id: StringName, condition_id: StringName, progress: float, held: int, required: int)
+
+## A faction satisfied a win condition they are allowed to pursue.
+@warning_ignore("unused_signal")
+signal victory_achieved(faction_id: StringName, condition_id: StringName, condition: WinConditionData)
+

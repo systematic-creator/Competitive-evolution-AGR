@@ -1,66 +1,40 @@
-cat << 'EOF' > ARCHITECTURE.md
-# Project Architecture: Competitive Evolution AGR (Godot 4.x)
+# Competitive Evolution AGR
 
-## 1. Engine & Target Specs
-* **Engine:** Godot 4.3+ (Forward+ or Mobile Renderer)
-* **Language:** Strictly typed GDScript 2.0 (`class_name`, static typing on all variables/functions)
-* **AR Backend:** Godot OpenXR Vendors Plugin (ARCore for Android / ARKit for iOS) with Passthrough enabled.
-* **World Scale:** 1 Godot Unit = 1 Meter in real-world AR space.
+Mobile AR real-time strategy and species/faction evolution game built in **Godot 4.3+** (strictly typed GDScript 2.0). Players anchor a virtual world to physical space and move closer or farther to travel across four gameplay scales.
 
-## 2. Core Design Rules for AI Generation
-1. **Decoupled Simulation:** Keep Faction AI, Resource Tick loops, and Era Progression in pure `RefCounted` classes or Autoloads. Never tie simulation math to visual meshes or AR camera transforms.
-2. **Signal-Driven UI & Visuals:** Systems communicate upward via Godot Signals (`EventBus`). Visual nodes listen to data changes rather than polling every frame.
-3. **Hybrid AR-to-Virtual Camera:** 
-   * Tiers 1–3 use the physical `XRCamera3D` moving relative to an `XRAnchor3D`.
-   * Tier 4 (Third-Person) smoothly disables AR tracking influence and interpolates a standard `Camera3D` behind a `CharacterBody3D`, adding a virtual touchscreen joystick.
+This repository also includes a **desktop concept build**: a full orbit globe, one playable region, three AI factions, and one player faction, with the AR zoom stand-in mapped to mouse-wheel camera distance. OpenXR stays off so the project runs on a desktop or headless CI machine.
 
-## 3. Folder Structure
-res://
-├── autoload/
-│   ├── event_bus.gd          # Global signals (era_changed, zoom_tier_changed, region_selected)
-│   └── game_state.gd         # Active factions, global tick timer, current zoom tier
-├── data/
-│   ├── eras/                 # .tres files (EraData resources: Stone, Bronze, Industrial, etc.)
-│   └── species/              # .tres files (SpeciesData resources: traits, starting bonuses)
-├── resources/                # Custom Resource definitions (era_data.gd, species_data.gd)
-├── scenes/
-│   ├── main_ar.tscn          # XROrigin3D, XRCamera3D, WorldEnvironment (transparent bg), AR Anchor
-│   ├── world/
-│   │   ├── orbit_globe.tscn  # Tier 1: Low-poly 3D sphere with clickable region markers
-│   │   └── flat_diorama.tscn # Tiers 2–4: Floating flat terrain chunk with NavigationRegion3D
-│   ├── entities/             # Base Building and Unit scenes with modular mesh slots
-│   └── ui/                   # Minimal spatial UI & Third-person touch controls
-└── scripts/
-    ├── ar/                   # Plane detection, anchor placement, pinch-to-scale
-    ├── camera/               # ZoomTierController & ThirdPersonRig
-    └── simulation/           # FactionManager, ResourceTick, BuildingUpgradeSystem
+## Quick start (desktop)
 
-## 4. The 4-Tier Zoom & Transition Pipeline
-* **Tier 1: ORBIT (Camera distance > 1.2m from Anchor)**
-  * Visible: `orbit_globe.tscn` (Rotating 3D planet).
-  * Hidden: `flat_diorama.tscn`.
-  * Interaction: Tap a glowing Region Pin on the sphere to lock onto that region and zoom in.
-* **Transition (1.2m -> 0.9m):**
-  * Crossfade/scale-down `orbit_globe` while scaling-up `flat_diorama` loaded with that region's biome and faction data.
-* **Tier 2: REGION (0.9m – 0.55m)**
-  * Visible: `flat_diorama.tscn` (Macro view: territory borders, city hubs, resource nodes).
-  * Hidden: Individual worker units (simulated abstractly in background).
-* **Tier 3: RTS (0.55m – 0.20m)**
-  * Visible: Active buildings, moving `NavigationAgent3D` units, health bars, build grids.
-  * Interaction: Center-screen reticle + tap to select/command squads.
-* **Tier 4: THIRD_PERSON (Triggered via "Possess Unit" button in RTS tier)**
-  * Camera detaches from `XRCamera3D` transform, lerps to unit's `SpringArm3D`, enables virtual joystick.
+1. Open the project in Godot 4.3 (or run the official Linux editor binary).
+2. The main scene is `scenes/main_desktop.tscn`.
+3. Press Play.
+    - **Scroll** to move between Orbit / Region / RTS distances (1.2m / 0.9m / 0.55m / 0.20m).
+    - **Click a glowing region pin** on the globe to enter the Verdant Basin (the only accessible region in this concept).
+    - **Left-click** a unit to select, **right-click** the ground to move. HUD buttons train units and enter build/claim mode (the faint hex overlay appears in the RTS tier); left-click a cell to place. Outposts hard-claim revealed rare nodes. Auto-Battle resolves a hex skirmish in the sim; **Contest (possess)** drops you into Tier 4 to fight the skirmish yourself (see below).
+    - **P** possesses a selected unit (Tier 4). **WASD** moves it. **P** or **Esc** releases.
+    - **Space** pauses or resumes the simulation.
+    - **Skirmish possession (Tier 4):** with a soldier standing in an enemy-held hex of a revealed rare node, press **Contest (possess)**. You take over one squad member behind a SpringArm3D camera. **WASD** / arrows or the on-screen joystick move (camera-relative), **F** / **J** or the Attack button strike, **Q** / **E** or a drag on empty screen turn the camera, **Esc** or Auto-resolve falls back to auto-battle. The strategic clock is held while you fight; it resumes when the skirmish is resolved.
 
-## 5. Data-Driven Era & Species System
-* `EraData` (extends `Resource`):
-  * `era_name: String`
-  * `era_index: int`
-  * `building_meshes: Dictionary` (Maps `StringName` building IDs like `&"town_center"` to `PackedScene` or `Mesh`)
-  * `unit_meshes: Dictionary`
-  * `production_multiplier: float`
-* When `EventBus.era_changed` fires for a faction, existing `Building` nodes swap their child mesh/scene using `EraData` without losing their grid coordinates or HP.
-EOF
+## Headless tests
 
-git add ARCHITECTURE.md
-git commit -m "Add Godot 4 AR multi-scale architecture blueprint"
-git push origin main
+```bash
+godot --headless --path . res://scenes/debug/smoke_test.tscn
+godot --headless --path . res://scenes/debug/sim_tests.tscn
+```
+
+Both scenes print `PASS` / `FAIL` lines and quit with a non-zero exit code on failure when running headless.
+
+## Architecture
+
+See [`ARCHITECTURE.md`](ARCHITECTURE.md) for the engine rules, folder map, zoom pipeline, and data-driven era/species system. Simulation logic (faction AI, resource ticks, era progression) is decoupled from visual nodes and camera tracking via the `EventBus` autoload.
+
+Starter data lives under `data/eras`, `data/species`, `data/factions`, `data/regions`, and `data/nodes`.
+
+## Branching note
+
+The playable project lives on `claude/godot-project-init-fywmz7` (and the local `concept-build` branch). `main` currently only contains a leftover bootstrap script in `README.md` and should receive this work in a merge, replacing that file with this README.
+
+## License / status
+
+Concept / work-in-progress. Art is primitive engine meshes on purpose.

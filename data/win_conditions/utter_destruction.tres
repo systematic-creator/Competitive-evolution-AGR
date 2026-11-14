@@ -1,0 +1,16 @@
+[gd_resource type="Resource" script_class="WinConditionData" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://resources/win_condition_data.gd" id="1_win"]
+
+[resource]
+script = ExtResource("1_win")
+condition_id = &"utter_destruction"
+display_name = "Utter Destruction"
+description = "Eliminate every rival structure and unit."
+kind = &"destruction"
+claimed_hex_percent = 0.6
+hold_ticks = 4
+era_lead = 1
+economy_lead_ratio = 1.5
+superiority_hold_ticks = 4
+destruction_hold_ticks = 1

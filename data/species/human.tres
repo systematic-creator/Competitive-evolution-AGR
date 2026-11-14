@@ -1,0 +1,46 @@
+[gd_resource type="Resource" script_class="SpeciesData" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://resources/species_data.gd" id="1_sp"]
+
+[resource]
+script = ExtResource("1_sp")
+species_id = &"human"
+display_name = "Humans"
+description = "Balanced settlers of the basin. Fastest era progression through scholarship and trade roads."
+faction_color = Color(0.95, 0.78, 0.28, 1)
+era_display_names = PackedStringArray()
+traits = Array[StringName]([&"adaptive",
+&"agrarian"])
+starting_era_index = 0
+starting_resources = {
+&"food": 90,
+&"wood": 80,
+&"stone": 50
+}
+starting_unit_count = 3
+gather_rate_multiplier = 1.0
+build_speed_multiplier = 1.0
+research_speed_multiplier = 1.35
+unit_health_multiplier = 1.0
+unit_speed_multiplier = 1.0
+unit_cost_multiplier = 1.0
+era_cost_multiplier = 0.8
+train_speed_multiplier = 1.0
+territory_regen_per_tick = 0
+defense_hold_bonus_per_tick = 0.0
+max_hold_defense_bonus = 0.0
+industry_production_bonus = 0.0
+units_are_constructed = false
+ai_expand_weight = 1.0
+ai_military_weight = 1.0
+ai_economy_weight = 1.0
+ai_era_weight = 1.6
+ai_defense_weight = 1.0
+ai_water_preference = 0.1
+harvest_speed_multiplier = 1.0
+node_depletion_multiplier = 1.0
+can_build_extractors = false
+extractor_rare_yield_bonus = 0.0
+ai_rare_weight = 1.1
+ai_escalation_style = &"balanced"
+allowed_win_condition_ids = Array[StringName]([&"complete_domination", &"unbridgeable_superiority", &"utter_destruction"])

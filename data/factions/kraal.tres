@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="FactionData" load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://resources/faction_data.gd" id="1_fac"]
+[ext_resource type="Resource" path="res://data/species/kraal.tres" id="2_sp"]
+
+[resource]
+script = ExtResource("1_fac")
+faction_id = &"kraal"
+display_name = "Kraal Swarm"
+is_player = false
+species = ExtResource("2_sp")
+faction_color = Color(0.82, 0.42, 0.16, 1)
+home_region_id = &"chitin_warrens"
