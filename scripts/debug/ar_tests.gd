@@ -53,6 +53,7 @@ func _xform_near(a: Transform3D, b: Transform3D, eps: float = 0.0005) -> bool:
 func _test_mode_selection() -> void:
 	_check("no ARCore XR interface is registered headless", XRServer.find_interface(ARCoreBridge.INTERFACE_NAME) == null)
 	_check("ARCore plugin is absent headless", not ARCoreBridge.plugin_present())
+	_check("camera permission counts as granted off Android", ARCoreBridge.camera_permission_granted())
 	_check("no plugin and no interface selects the fallback", (
 		ARSessionController.choose_mode(false, null) == ARSessionController.Mode.FALLBACK
 	))

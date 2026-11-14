@@ -71,7 +71,7 @@ zoom from Orbit → Region → RTS.
 godot --headless --path . --import
 godot --headless --path . res://scenes/debug/smoke_test.tscn   # 14 passed
 godot --headless --path . res://scenes/debug/sim_tests.tscn    # 165 passed
-godot --headless --path . res://scenes/debug/ar_tests.tscn     # 53 passed
+godot --headless --path . res://scenes/debug/ar_tests.tscn     # 54 passed
 ```
 
 Both print `PASS` / `FAIL` lines and quit non-zero on failure when headless.

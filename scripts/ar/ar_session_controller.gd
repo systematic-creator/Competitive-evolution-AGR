@@ -49,6 +49,8 @@ var reticle: Node3D
 var _adjusting: bool = false
 var _start_elapsed: float = 0.0
 var _saved_background: int = Environment.BG_COLOR
+var _awaiting_camera: bool = false
+var _permission_poll: float = 0.0
 
 
 ## Pick a mode from what the runtime offers (pure, unit-tested).
@@ -72,14 +74,31 @@ func setup(p_world_anchor: Node3D, p_pivot: Node3D, p_rig: DesktopRig, p_third: 
 	rts = p_rts
 	environment = p_environment
 	if ARCoreBridge.plugin_present():
-		bridge = ARCoreBridge.new()
-		if bridge.start(get_viewport()):
-			_enter_ar()
+		if not ARCoreBridge.camera_permission_granted():
+			# Play in the fallback view until the camera is allowed, then
+			# switch to AR (polled in _process; see _poll_camera_permission).
+			fallback_reason = "Waiting for camera permission."
+			_awaiting_camera = true
+			OS.request_permission(ARCoreBridge.CAMERA_PERMISSION)
+			_enter_fallback()
 			return
-		fallback_reason = bridge.failure_reason
+		if _try_start_ar():
+			return
 	elif fallback_reason.is_empty():
 		fallback_reason = "No AR interface (desktop, headless, or a non-AR build)."
 	_enter_fallback()
+
+
+## Start ARCore and enter AR mode; on failure keep (or enter) the fallback.
+func _try_start_ar() -> bool:
+	bridge = ARCoreBridge.new()
+	if bridge.start(get_viewport()):
+		_enter_ar()
+		return true
+	fallback_reason = bridge.failure_reason
+	push_warning("AR disabled: %s" % fallback_reason)
+	bridge = null
+	return false
 
 
 func is_ar() -> bool:
@@ -250,6 +269,8 @@ func _apply_transforms() -> void:
 
 func _process(delta: float) -> void:
 	if mode != Mode.AR:
+		if _awaiting_camera:
+			_poll_camera_permission(delta)
 		return
 	if not bridge.is_running():
 		_start_elapsed += delta
@@ -263,6 +284,17 @@ func _process(delta: float) -> void:
 	anchors.poll()
 	_apply_transforms()
 	_drive_tier()
+
+
+func _poll_camera_permission(delta: float) -> void:
+	_permission_poll += delta
+	if _permission_poll < 0.5:
+		return
+	_permission_poll = 0.0
+	if not ARCoreBridge.camera_permission_granted():
+		return
+	_awaiting_camera = false
+	_try_start_ar()
 
 
 func _update_reticle() -> void:

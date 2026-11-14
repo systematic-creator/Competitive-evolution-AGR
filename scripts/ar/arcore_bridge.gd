@@ -8,6 +8,7 @@ extends RefCounted
 const PLUGIN_SINGLETON: String = "ARCorePlugin"
 const INTERFACE_CLASS: String = "ARCoreInterface"
 const INTERFACE_NAME: StringName = &"ARCore"
+const CAMERA_PERMISSION: String = "android.permission.CAMERA"
 ## Methods added by tools/arcore_plugin/agr-arcore.patch. An unpatched
 ## upstream build lacks them, and AR then falls back to the desktop camera.
 const REQUIRED_METHODS: PackedStringArray = [
@@ -19,10 +20,23 @@ const REQUIRED_METHODS: PackedStringArray = [
 	"remove_anchor",
 ]
 
+## Every ARCoreInterface this app creates stays referenced here for the
+## process lifetime. The plugin's native destructor crashes (SIGSEGV) when the
+## object is freed, e.g. after a failed initialize(), so it must never be freed.
+static var _keep_alive: Array[XRInterface] = []
+
 var interface: XRInterface
 var failure_reason: String = ""
 var _plugin: Object
 var _added_interface: bool = false
+
+
+## True when the app may use the camera. ARCore cannot create a session
+## without it, so AR waits for the grant instead of failing at launch.
+static func camera_permission_granted() -> bool:
+	if not OS.has_feature("android"):
+		return true
+	return CAMERA_PERMISSION in OS.get_granted_permissions()
 
 
 ## True when the Android plugin singleton and the GDExtension class exist.
@@ -43,6 +57,7 @@ func start(viewport: Viewport) -> bool:
 		if interface == null:
 			failure_reason = "Could not create the ARCore interface."
 			return false
+		_keep_alive.append(interface)
 		XRServer.add_interface(interface)
 		_added_interface = true
 	for method: String in REQUIRED_METHODS:
@@ -50,10 +65,17 @@ func start(viewport: Viewport) -> bool:
 			failure_reason = "ARCore plugin lacks %s (unpatched build)." % method
 			return false
 	_plugin.call("initializeEnvironment")
-	interface.call("enable_horizontal_plane_detection", true)
+	# initialize() must come before any enable_* call: the plugin's setters
+	# reconfigure the ArSession without checking it exists, so enabling plane
+	# detection first dereferences a null session (native SIGSEGV at launch).
 	if not interface.initialize():
 		failure_reason = "ARCore did not start (unsupported device, ARCore not installed, or camera permission denied)."
+		if _added_interface:
+			XRServer.remove_interface(interface)
+			_added_interface = false
+		interface = null
 		return false
+	interface.call("enable_horizontal_plane_detection", true)
 	viewport.use_xr = true
 	return true
 
