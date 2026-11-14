@@ -9,6 +9,8 @@ enum ZoomTier { ORBIT, REGION, RTS, THIRD_PERSON }
 
 ## Seconds between simulation ticks.
 const DEFAULT_TICK_INTERVAL: float = 1.0
+## Match SkirmishCombat.STEP_SECONDS without naming that class from this autoload.
+const COMBAT_STEP_SECONDS: float = 0.1
 
 var _current_zoom_tier: ZoomTier = ZoomTier.ORBIT
 var current_zoom_tier: ZoomTier:
@@ -51,8 +53,8 @@ func _process(delta: float) -> void:
 	if world != null and world.has_live_combat():
 		# Tier 4 fight: hold the strategic tick and run fixed combat steps.
 		_combat_accumulator += delta
-		while _combat_accumulator >= SkirmishCombat.STEP_SECONDS and world.has_live_combat():
-			_combat_accumulator -= SkirmishCombat.STEP_SECONDS
+		while _combat_accumulator >= COMBAT_STEP_SECONDS and world.has_live_combat():
+			_combat_accumulator -= COMBAT_STEP_SECONDS
 			world.step_combat()
 		return
 	_combat_accumulator = 0.0
