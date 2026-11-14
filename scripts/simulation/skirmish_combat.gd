@@ -32,6 +32,9 @@ const STEER_SECTORS: int = 16
 ## Arena: the contested hex plus its ring (radius 1), as a circle in metres.
 const ARENA_RADIUS_HEXES: float = 2.6
 
+## Must stay equal to ClaimSystem.STRUCTURE_DEFENSE (no class_name cycle).
+const STRUCTURE_DEFENSE_WEIGHT: float = 0.75
+
 var skirmish_id: int = -1
 var attacker_id: StringName = &""
 var defender_id: StringName = &""
@@ -308,7 +311,7 @@ func side_strength(world: SimWorld, attacking: bool) -> float:
 		total += SimCatalog.unit_combat_power(unit.unit_type) * ratio
 	if not attacking:
 		if _guard_alive() and guard_max_hp > 0:
-			total += ClaimSystem.STRUCTURE_DEFENSE * float(guard_hp) / float(guard_max_hp)
+			total += STRUCTURE_DEFENSE_WEIGHT * float(guard_hp) / float(guard_max_hp)
 		total *= defender_damage_multiplier
 	return total
 
