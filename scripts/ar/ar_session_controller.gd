@@ -8,9 +8,13 @@ extends Node
 ##       OrbitGlobe, FlatDiorama (all gameplay visuals in diorama-local space)
 ##   XROrigin3D / XRCamera3D   <- created here in AR mode only
 ##
-## AR mode: ARCore session + camera passthrough. A reticle tracks the plane
-## under the screen centre; a tap anchors the diorama there. Unlocked, one
-## finger drags it, pinch scales, twist rotates. Locked, touches go to
+## AR mode: ARCore session + camera passthrough, driven by a CalibrationFlow:
+## scan (live tracking status, feature points and found surfaces drawn on the
+## video) -> a reticle on a surface + "Place board" -> adjust (drag / pinch /
+## twist) -> Lock. If no surface turns up, "Place in front of me" anchors the
+## board ~0.6 m ahead and "Play without AR" drops to the touch camera, so the
+## player is never stuck. The gameplay HUD is hidden and the simulation (ticks
+## and win checks) is paused until the board is locked. Locked, touches go to
 ## gameplay (RtsController) and pinch magnifies if Magnify is on. The phone's
 ## real distance to the diorama, divided by its scale, picks the zoom tier.
 ##
@@ -22,6 +26,12 @@ enum Mode { FALLBACK, AR }
 enum Phase { SEARCHING, READY, PLACED }
 
 const RETICLE_RADIUS: float = 0.06
+## "Place in front of me": metres ahead of and below the phone.
+const FRONT_PLACE_DISTANCE: float = 0.6
+const FRONT_PLACE_DROP: float = 0.35
+## Seconds between diagnostics / surface overlay refreshes.
+const DIAG_INTERVAL: float = 0.2
+const MAX_OVERLAY_POINTS: int = 400
 ## Seconds to wait for ARCore to report an initialized session before falling back.
 const START_GRACE_SECONDS: float = 6.0
 
@@ -45,12 +55,23 @@ var hud: ARHud
 var xr_origin: XROrigin3D
 var xr_camera: XRCamera3D
 var reticle: Node3D
+var flow: CalibrationFlow = CalibrationFlow.new()
+## The gameplay HUD (DesktopHud); hidden while calibrating.
+var gameplay_hud: CanvasLayer
+## Tests inject a fake bridge here; returns an ARCoreBridge.
+var bridge_factory: Callable = Callable()
+var tracking_info: Dictionary = {}
 
 var _adjusting: bool = false
 var _start_elapsed: float = 0.0
 var _saved_background: int = Environment.BG_COLOR
 var _awaiting_camera: bool = false
+var _camera_denied: bool = false
 var _permission_poll: float = 0.0
+var _diag_elapsed: float = 0.0
+var _overlay: Node3D
+var _overlay_points: MultiMeshInstance3D
+var _overlay_planes: Node3D
 
 
 ## Pick a mode from what the runtime offers (pure, unit-tested).
@@ -75,14 +96,16 @@ func setup(p_world_anchor: Node3D, p_pivot: Node3D, p_rig: DesktopRig, p_third: 
 	environment = p_environment
 	if ARCoreBridge.plugin_present():
 		if not ARCoreBridge.camera_permission_granted():
-			# Play in the fallback view until the camera is allowed, then
-			# switch to AR (polled in _process; see _poll_camera_permission).
+			# Hold the game in the fallback view until the camera is allowed,
+			# then switch to AR (polled in _process; see _poll_camera_permission).
 			fallback_reason = "Waiting for camera permission."
 			_awaiting_camera = true
+			if not get_tree().on_request_permissions_result.is_connected(_on_permission_result):
+				get_tree().on_request_permissions_result.connect(_on_permission_result)
 			OS.request_permission(ARCoreBridge.CAMERA_PERMISSION)
 			_enter_fallback()
 			return
-		if _try_start_ar():
+		if try_start_ar():
 			return
 	elif fallback_reason.is_empty():
 		fallback_reason = "No AR interface (desktop, headless, or a non-AR build)."
@@ -90,15 +113,25 @@ func setup(p_world_anchor: Node3D, p_pivot: Node3D, p_rig: DesktopRig, p_third: 
 
 
 ## Start ARCore and enter AR mode; on failure keep (or enter) the fallback.
-func _try_start_ar() -> bool:
-	bridge = ARCoreBridge.new()
+func try_start_ar() -> bool:
+	bridge = bridge_factory.call() as ARCoreBridge if bridge_factory.is_valid() else ARCoreBridge.new()
 	if bridge.start(get_viewport()):
 		_enter_ar()
 		return true
 	fallback_reason = bridge.failure_reason
 	push_warning("AR disabled: %s" % fallback_reason)
 	bridge = null
+	_sync_simulation()
 	return false
+
+
+## The camera was refused: play in the fallback view (keep polling in case
+## the player grants it later from a second prompt or the settings).
+func _on_permission_result(permission: String, granted: bool) -> void:
+	if permission == ARCoreBridge.CAMERA_PERMISSION and not granted and mode == Mode.FALLBACK:
+		_camera_denied = true
+		fallback_reason = "Camera permission denied."
+		_sync_simulation()
 
 
 func is_ar() -> bool:
@@ -130,6 +163,7 @@ func _enter_fallback() -> void:
 		pivot.transform = Transform3D.IDENTITY
 	if world_anchor != null:
 		world_anchor.visible = true
+	_sync_simulation()
 
 
 func _enter_ar() -> void:
@@ -139,6 +173,11 @@ func _enter_ar() -> void:
 	anchors.tracking_changed.connect(_on_anchor_tracking_changed)
 	placement = DioramaPlacement.new()
 	placement.load_from()
+	# Keep the saved size / rotation, but every session starts unlocked: the
+	# board has to be placed again in this room.
+	placement.locked = false
+	flow.restart()
+	tracking_info = {}
 	xr_origin = XROrigin3D.new()
 	xr_origin.name = "XROrigin3D"
 	add_child(xr_origin)
@@ -161,6 +200,8 @@ func _enter_ar() -> void:
 	reticle = _make_reticle()
 	add_child(reticle)
 	reticle.visible = false
+	_overlay = _make_overlay()
+	add_child(_overlay)
 	world_anchor.visible = false
 	hud = ARHud.new()
 	add_child(hud)
@@ -168,10 +209,13 @@ func _enter_ar() -> void:
 	hud.magnify_toggled.connect(func(on: bool) -> void: magnify_enabled = on)
 	hud.recenter_pressed.connect(recenter)
 	hud.replace_pressed.connect(begin_replace)
-	hud.set_locked(placement.locked)
+	hud.place_pressed.connect(func() -> void: place_at_reticle())
+	hud.place_in_front_pressed.connect(func() -> void: place_in_front())
+	hud.play_without_ar_pressed.connect(func() -> void: fall_back("Player chose to play without AR."))
 	EventBus.unit_possessed.connect(_on_unit_possessed)
 	EventBus.unit_released.connect(_on_unit_released)
-	hud.set_status("Move your phone slowly to find a table or floor.")
+	hud.apply_flow(flow)
+	_sync_simulation()
 
 
 ## Leave AR for the desktop camera (ARCore failed after starting).
@@ -189,6 +233,11 @@ func fall_back(reason: String) -> void:
 	if reticle != null:
 		reticle.queue_free()
 		reticle = null
+	if _overlay != null:
+		_overlay.queue_free()
+		_overlay = null
+		_overlay_points = null
+		_overlay_planes = null
 	if hud != null:
 		hud.queue_free()
 		hud = null
@@ -208,20 +257,59 @@ func fall_back(reason: String) -> void:
 
 # --- Placement / adjustment ---------------------------------------------------
 
-## Place (or re-place) the diorama on the plane under the reticle.
+## Place (or re-place) the diorama on the surface under the reticle.
 func place_at_reticle() -> bool:
+	if not is_ar() or phase == Phase.PLACED:
+		return false
 	if not anchors.place_at_screen(Vector2(0.5, 0.5)):
 		return false
+	_after_placed()
+	return true
+
+
+## Fallback when no surface is found: anchor the board ~0.6 m in front of
+## and below the phone, level and facing the player.
+func place_in_front() -> bool:
+	if not is_ar() or phase == Phase.PLACED or xr_camera == null:
+		return false
+	var pose: Transform3D = front_pose(xr_camera.global_transform)
+	var origin_xform: Transform3D = xr_origin.global_transform if xr_origin != null else Transform3D.IDENTITY
+	if not anchors.place_at_pose(origin_xform.affine_inverse() * pose):
+		if hud != null:
+			hud.set_status("Can't place yet. %s" % CalibrationFlow.tracking_message(tracking_info))
+		return false
+	_after_placed()
+	return true
+
+
+## World pose FRONT_PLACE_DISTANCE ahead of (and FRONT_PLACE_DROP below) a
+## camera, level, with -Z pointing away from the player. Pure; unit-tested.
+static func front_pose(camera: Transform3D) -> Transform3D:
+	var forward: Vector3 = -camera.basis.z
+	forward.y = 0.0
+	if forward.length() < 0.001:
+		forward = -camera.basis.y if absf(camera.basis.z.y) > 0.5 else Vector3.FORWARD
+		forward.y = 0.0
+		if forward.length() < 0.001:
+			forward = Vector3.FORWARD
+	forward = forward.normalized()
+	var origin: Vector3 = camera.origin + forward * FRONT_PLACE_DISTANCE + Vector3.DOWN * FRONT_PLACE_DROP
+	return Transform3D(Basis.looking_at(forward, Vector3.UP), origin)
+
+
+func _after_placed() -> void:
 	phase = Phase.PLACED
-	reticle.visible = false
+	flow.placed()
+	if reticle != null:
+		reticle.visible = false
+	if _overlay != null:
+		_overlay.visible = false
 	world_anchor.visible = true
 	_apply_transforms()
 	if hud != null:
-		hud.set_placed(true)
-		hud.set_locked(placement.locked)
-		hud.set_status(_placed_hint())
+		hud.apply_flow(flow)
 	EventBus.world_anchor_placed.emit(world_anchor.global_transform)
-	return true
+	_sync_simulation()
 
 
 func begin_replace() -> void:
@@ -229,10 +317,14 @@ func begin_replace() -> void:
 		return
 	anchors.clear()
 	phase = Phase.SEARCHING
+	placement.locked = false
+	flow.restart()
 	world_anchor.visible = false
+	if _overlay != null:
+		_overlay.visible = true
 	if hud != null:
-		hud.set_placed(false)
-		hud.set_status("Point at a surface and tap to place the diorama.")
+		hud.apply_flow(flow)
+	_sync_simulation()
 
 
 func recenter() -> void:
@@ -242,12 +334,34 @@ func recenter() -> void:
 
 
 func set_locked(locked: bool) -> void:
+	if is_ar() and phase != Phase.PLACED:
+		return
 	placement.locked = locked
 	placement.save()
 	gestures.reset()
+	flow.set_locked(locked)
 	if hud != null:
-		hud.set_locked(locked)
-		hud.set_status(_placed_hint())
+		hud.apply_flow(flow)
+	_sync_simulation()
+
+
+## The simulation (ticks + win checks) runs only once the board is locked in
+## AR, or in the fallback view (unless we are still waiting for the camera).
+## Pausing only shifts wall-clock time; the tick sequence stays deterministic.
+func should_run_simulation() -> bool:
+	if mode == Mode.AR:
+		return flow.should_run_simulation()
+	return not _awaiting_camera or _camera_denied
+
+
+func _sync_simulation() -> void:
+	var run: bool = should_run_simulation()
+	if run and not GameState.is_simulation_running:
+		GameState.start_simulation()
+	elif not run and GameState.is_simulation_running:
+		GameState.stop_simulation()
+	if gameplay_hud != null:
+		gameplay_hud.visible = mode == Mode.FALLBACK or flow.step == CalibrationFlow.Step.LOCKED
 
 
 ## Put the world anchor at `anchor_pose` (Godot world space, made upright).
@@ -279,7 +393,17 @@ func _process(delta: float) -> void:
 		return
 	_start_elapsed = 0.0
 	if phase != Phase.PLACED:
-		_update_reticle()
+		_diag_elapsed += delta
+		var refresh: bool = _diag_elapsed >= DIAG_INTERVAL
+		if refresh:
+			_diag_elapsed = 0.0
+			tracking_info = bridge.tracking_info()
+		var found: bool = _update_reticle()
+		flow.update(delta, tracking_info, found)
+		if refresh:
+			_update_overlay()
+		if hud != null:
+			hud.apply_flow(flow)
 		return
 	anchors.poll()
 	_apply_transforms()
@@ -294,10 +418,11 @@ func _poll_camera_permission(delta: float) -> void:
 	if not ARCoreBridge.camera_permission_granted():
 		return
 	_awaiting_camera = false
-	_try_start_ar()
+	_camera_denied = false
+	try_start_ar()
 
 
-func _update_reticle() -> void:
+func _update_reticle() -> bool:
 	var hit: Dictionary = bridge.hit_test(Vector2(0.5, 0.5))
 	var found: bool = bool(hit.get("hit", false))
 	reticle.visible = found
@@ -305,10 +430,104 @@ func _update_reticle() -> void:
 		var origin_xform: Transform3D = xr_origin.global_transform
 		reticle.global_transform = origin_xform * AnchorService.upright(hit["pose"] as Transform3D)
 		phase = Phase.READY
-		hud.set_status("Tap to place the diorama here.")
 	else:
 		phase = Phase.SEARCHING
-		hud.set_status("Move your phone slowly to find a table or floor.")
+	return found
+
+
+## Draw what ARCore sees: feature points and found surfaces, so the player
+## can tell scanning is making progress.
+func _update_overlay() -> void:
+	if _overlay == null:
+		return
+	var origin_xform: Transform3D = xr_origin.global_transform if xr_origin != null else Transform3D.IDENTITY
+	_overlay.global_transform = origin_xform
+	var points: PackedVector3Array = bridge.point_cloud(MAX_OVERLAY_POINTS)
+	var multimesh: MultiMesh = _overlay_points.multimesh
+	multimesh.instance_count = points.size()
+	for i: int in points.size():
+		multimesh.set_instance_transform(i, Transform3D(Basis(), points[i]))
+	for child: Node in _overlay_planes.get_children():
+		child.queue_free()
+	for entry: Variant in bridge.horizontal_planes():
+		var plane: Dictionary = entry as Dictionary
+		var mesh: ArrayMesh = plane_mesh(plane.get("polygon", PackedVector2Array()) as PackedVector2Array)
+		if mesh == null:
+			continue
+		var instance := MeshInstance3D.new()
+		instance.mesh = mesh
+		instance.material_override = _surface_material()
+		instance.transform = plane.get("pose", Transform3D.IDENTITY) as Transform3D
+		_overlay_planes.add_child(instance)
+
+
+## Triangle fan for a plane polygon in plane-local (x, z). Null if degenerate.
+static func plane_mesh(polygon: PackedVector2Array) -> ArrayMesh:
+	if polygon.size() < 3:
+		return null
+	var vertices := PackedVector3Array()
+	var center := Vector2.ZERO
+	for p: Vector2 in polygon:
+		center += p
+	center /= float(polygon.size())
+	for i: int in polygon.size():
+		var a: Vector2 = polygon[i]
+		var b: Vector2 = polygon[(i + 1) % polygon.size()]
+		vertices.append(Vector3(center.x, 0.002, center.y))
+		vertices.append(Vector3(b.x, 0.002, b.y))
+		vertices.append(Vector3(a.x, 0.002, a.y))
+	var arrays: Array = []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = vertices
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	return mesh
+
+
+var _surface_mat: StandardMaterial3D
+func _surface_material() -> StandardMaterial3D:
+	if _surface_mat == null:
+		_surface_mat = StandardMaterial3D.new()
+		_surface_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		_surface_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		_surface_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		_surface_mat.albedo_color = Color(0.35, 0.95, 1.0, 0.28)
+	return _surface_mat
+
+
+func _make_overlay() -> Node3D:
+	var root := Node3D.new()
+	root.name = "ScanOverlay"
+	_overlay_points = MultiMeshInstance3D.new()
+	_overlay_points.name = "FeaturePoints"
+	var multimesh := MultiMesh.new()
+	multimesh.transform_format = MultiMesh.TRANSFORM_3D
+	var dot := SphereMesh.new()
+	dot.radius = 0.004
+	dot.height = 0.008
+	dot.radial_segments = 6
+	dot.rings = 3
+	var material := StandardMaterial3D.new()
+	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	material.albedo_color = Color(1.0, 0.92, 0.35)
+	dot.material = material
+	multimesh.mesh = dot
+	_overlay_points.multimesh = multimesh
+	root.add_child(_overlay_points)
+	_overlay_planes = Node3D.new()
+	_overlay_planes.name = "Surfaces"
+	root.add_child(_overlay_planes)
+	return root
+
+
+## Android lifecycle -> ARCore session (the plugin does not hook it itself).
+func _notification(what: int) -> void:
+	if bridge == null or mode != Mode.AR:
+		return
+	if what == NOTIFICATION_APPLICATION_PAUSED:
+		bridge.pause()
+	elif what == NOTIFICATION_APPLICATION_RESUMED:
+		bridge.resume()
 
 
 ## Walk closer = zoom in: tiers follow the phone's real distance to the diorama.
@@ -395,15 +614,9 @@ func _on_anchor_tracking_changed(state: int) -> void:
 	if hud == null or phase != Phase.PLACED:
 		return
 	if state == AnchorBackend.Tracking.TRACKING:
-		hud.set_status(_placed_hint())
+		hud.apply_flow(flow)
 	else:
-		hud.set_status("Tracking lost. Hold still and point at the table.")
-
-
-func _placed_hint() -> String:
-	if placement.locked:
-		return "Locked. Walk closer to zoom in; tap units to play."
-	return "Drag to move, pinch to scale, twist to rotate. Lock when done."
+		hud.set_status("Tracking lost. Point the phone back at the board and hold still.")
 
 
 func _make_reticle() -> Node3D:

@@ -42,9 +42,9 @@ func _ready() -> void:
 	_add_btn(buttons, "Soldier", func() -> void: _train(SimIds.SOLDIER))
 	_add_btn(buttons, "Ironclad", func() -> void: _train(SimIds.IRONCLAD))
 	_add_btn(buttons, "Advance Era", func() -> void: _advance())
-	_add_btn(buttons, "Possess (P)", func() -> void: EventBus.unit_possessed.emit(null))
+	_add_btn(buttons, "Possess" if is_touch_ui() else "Possess (P)", func() -> void: EventBus.unit_possessed.emit(null))
 	_log = Label.new()
-	_log.text = "Scroll to zoom. Click a glowing pin to enter Verdant Basin. Left-click select, right-click move. OpenXR is off."
+	_log.text = default_hint()
 	_log.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	col.add_child(_log)
 	_victory = Label.new()
@@ -56,6 +56,17 @@ func _ready() -> void:
 	EventBus.victory_progress.connect(func(_a: StringName, _b: StringName, _c: float, _d: int, _e: int) -> void: _refresh())
 	EventBus.victory_achieved.connect(func(_a: StringName, _b: StringName, _c: WinConditionData) -> void: _refresh())
 	_refresh()
+
+
+## Phones and tablets get touch wording and finger-sized buttons.
+static func is_touch_ui() -> bool:
+	return OS.has_feature("mobile")
+
+
+static func default_hint() -> String:
+	if is_touch_ui():
+		return "Pinch to zoom. Tap a glowing pin to enter Verdant Basin. Tap a unit to select it, then tap the ground to move."
+	return "Scroll to zoom. Click a glowing pin to enter Verdant Basin. Left-click select, right-click move. OpenXR is off."
 
 
 ## True if a screen position lands on a HUD button (so touch taps there are
@@ -127,6 +138,10 @@ func _contest_possess() -> void:
 func _add_btn(parent: Control, text: String, cb: Callable) -> void:
 	var b := Button.new()
 	b.text = text
+	b.focus_mode = Control.FOCUS_NONE
+	if is_touch_ui():
+		b.custom_minimum_size = Vector2(120.0, 64.0)
+		b.add_theme_font_size_override("font_size", 20)
 	b.pressed.connect(cb)
 	parent.add_child(b)
 

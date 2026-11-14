@@ -59,6 +59,7 @@ func _ready() -> void:
 	rts.diorama = diorama
 	ar = ARSessionController.new()
 	ar.name = "ARSession"
+	ar.gameplay_hud = hud
 	add_child(ar)
 	ar.setup(_anchor, _pivot, rig, third, rts, _environment)
 	hud._refresh()

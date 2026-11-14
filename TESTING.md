@@ -61,9 +61,22 @@ and Attack / Auto-resolve buttons.
    After step 2, the plain **Android** preset no longer exports: a
    GDExtension Android plugin needs a Gradle build.
 
-On the phone: move slowly until the ring reticle appears on a table, tap to
-place, adjust (drag / pinch / twist), press **Lock**, then walk closer to
-zoom from Orbit → Region → RTS.
+On the phone the game starts in a three-step calibration. The simulation is
+paused and the gameplay HUD is hidden until the board is locked, so no ticks
+run and no win can be checked during setup.
+
+1. **Find a surface.** Sweep the phone slowly over a textured table or floor.
+   The banner shows live ARCore tracking (too dark, moving too fast, not
+   enough detail…) plus feature-point and surface counts, and the detected
+   points and surfaces are drawn as a light overlay. After ~12 s without a
+   surface, **Place in front of me** (about 0.6 m ahead and 0.35 m below the
+   phone) and **Play without AR** are offered.
+2. **Place.** When the ring reticle sits on a surface, press **Place board**
+   or tap anywhere.
+3. **Adjust.** Drag to move, pinch to scale and twist to rotate, then press
+   **Lock** to start play. **Re-place** goes back to step 1.
+
+Once locked, walk closer to zoom from Orbit → Region → RTS.
 
 ## Headless tests
 
@@ -71,7 +84,7 @@ zoom from Orbit → Region → RTS.
 godot --headless --path . --import
 godot --headless --path . res://scenes/debug/smoke_test.tscn   # 14 passed
 godot --headless --path . res://scenes/debug/sim_tests.tscn    # 165 passed
-godot --headless --path . res://scenes/debug/ar_tests.tscn     # 54 passed
+godot --headless --path . res://scenes/debug/ar_tests.tscn     # 84 passed
 ```
 
 Both print `PASS` / `FAIL` lines and quit non-zero on failure when headless.

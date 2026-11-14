@@ -19,6 +19,10 @@ func _run() -> void:
 	_test_placement()
 	_test_gestures()
 	_test_effective_distance_tiers()
+	_test_calibration_flow()
+	_test_front_pose_and_surface_mesh()
+	_test_no_win_at_start()
+	await _test_ar_calibration_controller()
 	GameState.reset()
 	print("%d passed, %d failed" % [_passed, _failed])
 	if DisplayServer.get_name() == "headless":
@@ -360,3 +364,143 @@ func _test_effective_distance_tiers() -> void:
 	_check("viewing: 2x magnify at 0.4 m reaches the RTS tier without moving", (
 		ZoomTierController.tier_for_distance(magnified) == GameState.ZoomTier.RTS
 	))
+
+
+# --- Calibration --------------------------------------------------------------
+
+func _test_calibration_flow() -> void:
+	var flow := CalibrationFlow.new()
+	_check("calibration: starts scanning with no place button", (
+		flow.step == CalibrationFlow.Step.SCANNING and not bool(flow.controls()["place"])
+		and bool(flow.controls()["sweep_hint"]) and flow.is_calibrating()
+	))
+	_check("calibration: the simulation is paused while scanning", not flow.should_run_simulation())
+	var tracking: Dictionary = {"camera_state": 0, "frames": 10, "points": 4}
+	flow.update(5.0, tracking, false)
+	_check("calibration: few feature points ask the player to sweep", flow.message().begins_with("Sweep the phone"))
+	_check("calibration: no fallback offer before the timeout", not flow.offers_fallback())
+	_check("calibration: tracking failures read as plain English", (
+		CalibrationFlow.tracking_message({"camera_state": 1, "frames": 5, "failure_reason": 2}).contains("too dark")
+		and CalibrationFlow.tracking_message({"camera_state": 1, "frames": 5, "failure_reason": 3}).contains("too fast")
+		and CalibrationFlow.tracking_message({"camera_state": 1, "frames": 5, "failure_reason": 4}).contains("not enough detail")
+		and CalibrationFlow.tracking_message({}).begins_with("Starting the camera")
+	))
+	flow.update(CalibrationFlow.FALLBACK_OFFER_SECONDS, tracking, false)
+	_check("calibration: after the timeout, Place in front of me / Play without AR are offered", (
+		flow.offers_fallback() and bool(flow.controls()["place_in_front"]) and bool(flow.controls()["play_without_ar"])
+	))
+	flow.update(0.1, tracking, true)
+	_check("calibration: a surface shows the Place board button", (
+		flow.step == CalibrationFlow.Step.SURFACE_FOUND and bool(flow.controls()["place"])
+		and not flow.offers_fallback()
+	))
+	flow.set_locked(true)
+	_check("calibration: lock is ignored before the board is placed", flow.step == CalibrationFlow.Step.SURFACE_FOUND)
+	flow.placed()
+	_check("calibration: placing moves to adjust (Lock + Re-place, still paused)", (
+		flow.step == CalibrationFlow.Step.ADJUSTING and bool(flow.controls()["lock"])
+		and bool(flow.controls()["replace"]) and not flow.should_run_simulation()
+	))
+	flow.set_locked(true)
+	_check("calibration: locking starts play", (
+		flow.step == CalibrationFlow.Step.LOCKED and flow.should_run_simulation() and not flow.is_calibrating()
+		and bool(flow.controls()["unlock"])
+	))
+	flow.set_locked(false)
+	_check("calibration: unlocking returns to adjust and pauses", (
+		flow.step == CalibrationFlow.Step.ADJUSTING and not flow.should_run_simulation()
+	))
+	flow.restart()
+	_check("calibration: re-place restarts scanning", flow.step == CalibrationFlow.Step.SCANNING and flow.scan_seconds == 0.0)
+
+
+func _test_front_pose_and_surface_mesh() -> void:
+	var camera := Transform3D(Basis(Vector3.RIGHT, deg_to_rad(-30.0)), Vector3(0.0, 1.4, 0.0))
+	var pose: Transform3D = ARSessionController.front_pose(camera)
+	_check("place in front: 0.6 m ahead and below the camera, level", (
+		_near(pose.origin, Vector3(0.0, 1.4 - ARSessionController.FRONT_PLACE_DROP, -ARSessionController.FRONT_PLACE_DISTANCE), 0.001)
+		and _near(pose.basis.y, Vector3.UP, 0.001) and _near(-pose.basis.z, Vector3.FORWARD, 0.001)
+	))
+	var straight_down := Transform3D(Basis(Vector3.RIGHT, deg_to_rad(-90.0)), Vector3(0.0, 1.0, 0.0))
+	var down_pose: Transform3D = ARSessionController.front_pose(straight_down)
+	_check("place in front: still level when the phone points straight down", _near(down_pose.basis.y, Vector3.UP, 0.001))
+	var square := PackedVector2Array([Vector2(-1, -1), Vector2(1, -1), Vector2(1, 1), Vector2(-1, 1)])
+	var mesh: ArrayMesh = ARSessionController.plane_mesh(square)
+	_check("surface overlay: a plane polygon becomes a triangle fan", (
+		mesh != null and mesh.surface_get_array_len(0) == 12
+	))
+	_check("surface overlay: degenerate polygons are skipped", ARSessionController.plane_mesh(PackedVector2Array([Vector2.ZERO, Vector2.ONE])) == null)
+
+
+func _test_no_win_at_start() -> void:
+	GameState.reset()
+	GameState.bootstrap_concept_world()
+	var victory: VictorySystem = GameState.world.victory
+	var any_held: bool = false
+	for key: Variant in victory.hold:
+		any_held = any_held or int(victory.hold[key]) > 0
+	_check("victory: nobody has won or is holding a condition at tick 0", victory.winner_id == &"" and not any_held)
+	GameState.reset()
+
+
+func _test_ar_calibration_controller() -> void:
+	var main: Node = await _load_main()
+	var ar: ARSessionController = main.get("ar") as ARSessionController
+	var hud: CanvasLayer = main.get("hud") as CanvasLayer
+	var fake := FakeARBridge.new()
+	ar.bridge_factory = func() -> ARCoreBridge: return fake
+	GameState.tick_interval = 0.02
+	_check("ar calibration: AR starts through the injected bridge", ar.try_start_ar() and ar.is_ar())
+	_check("ar calibration: the sim is paused and the gameplay HUD hidden while calibrating", (
+		not GameState.is_simulation_running and not hud.visible and ar.hud != null
+	))
+	var ticks_before: int = GameState.tick_count
+	await get_tree().create_timer(0.25).timeout
+	_check("ar calibration: no ticks (and no win checks) before the board is locked", (
+		GameState.tick_count == ticks_before and GameState.world.victory.winner_id == &""
+	))
+	_check("ar calibration: scanning shows the sweep hint and live stats", (
+		ar.flow.step == CalibrationFlow.Step.SCANNING and ar.hud.sweep_hint.visible
+		and ar.hud.stats_label.text.contains("64")
+	))
+	ar.flow.scan_seconds = CalibrationFlow.FALLBACK_OFFER_SECONDS + 1.0
+	await get_tree().process_frame
+	await get_tree().process_frame
+	_check("ar calibration: the fallback buttons appear after the timeout", (
+		ar.hud.place_in_front_button.visible and ar.hud.play_without_ar_button.visible
+	))
+	fake.info = {"camera_state": 1, "failure_reason": 2, "frames": 30, "points": 0}
+	ar.tracking_info = fake.info
+	_check("ar calibration: place in front refuses while tracking is lost", not ar.place_in_front() and not ar.is_placed())
+	fake.info = {"camera_state": 0, "failure_reason": 0, "frames": 30, "points": 64}
+	_check("ar calibration: place in front anchors the board", ar.place_in_front() and ar.is_placed() and fake.anchors_made == 1)
+	_check("ar calibration: adjusting keeps the sim paused and shows Lock", (
+		ar.flow.step == CalibrationFlow.Step.ADJUSTING and not GameState.is_simulation_running
+		and ar.hud.lock_button.visible and not hud.visible
+	))
+	ar.set_locked(true)
+	await get_tree().create_timer(0.25).timeout
+	_check("ar calibration: locking starts the sim and shows the gameplay HUD", (
+		GameState.is_simulation_running and hud.visible and GameState.tick_count > ticks_before
+		and not ar.hud.lock_button.visible and ar.hud.unlock_button.visible
+	))
+	ar.begin_replace()
+	_check("ar calibration: re-place pauses again and restarts scanning", (
+		not GameState.is_simulation_running and not hud.visible and ar.flow.step == CalibrationFlow.Step.SCANNING
+		and not ar.is_placed()
+	))
+	fake.surface_found = true
+	await get_tree().process_frame
+	await get_tree().process_frame
+	_check("ar calibration: a found surface shows the reticle and Place board", (
+		ar.flow.step == CalibrationFlow.Step.SURFACE_FOUND and ar.hud.place_button.visible and ar.reticle.visible
+	))
+	_check("ar calibration: Place board anchors on the surface", ar.place_at_reticle() and ar.is_placed())
+	ar.fall_back("Player chose to play without AR.")
+	_check("ar calibration: Play without AR resumes the sim in the touch view", (
+		not ar.is_ar() and GameState.is_simulation_running and hud.visible
+	))
+	GameState.tick_interval = GameState.DEFAULT_TICK_INTERVAL
+	main.queue_free()
+	await get_tree().process_frame
+	GameState.reset()

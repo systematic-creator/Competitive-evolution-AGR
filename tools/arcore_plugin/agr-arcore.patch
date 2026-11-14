@@ -1,9 +1,9 @@
 diff --git a/plugin/src/main/cpp/arcore_anchors.cpp b/plugin/src/main/cpp/arcore_anchors.cpp
 new file mode 100644
-index 0000000..5f9f94b
+index 0000000..4f5a939
 --- /dev/null
 +++ b/plugin/src/main/cpp/arcore_anchors.cpp
-@@ -0,0 +1,200 @@
+@@ -0,0 +1,368 @@
 +// Competitive Evolution AGR additions to the GodotVR ARCore plugin:
 +// horizontal-plane hit testing and ARCore anchors exposed to GDScript.
 +// Licensed under the plugin's MIT license.
@@ -13,6 +13,9 @@ index 0000000..5f9f94b
 +
 +#include <godot_cpp/classes/display_server.hpp>
 +#include <godot_cpp/classes/xr_server.hpp>
++#include <godot_cpp/variant/packed_vector2_array.hpp>
++#include <godot_cpp/variant/packed_vector3_array.hpp>
++#include <vector>
 +
 +using namespace godot;
 +
@@ -46,8 +49,11 @@ index 0000000..5f9f94b
 +	return pose;
 +}
 +
-+bool ARCoreInterface::find_upward_plane_hit(float p_normalized_x, float p_normalized_y, ArHitResult *r_hit, ArPose *r_pose) {
++bool ARCoreInterface::find_upward_plane_hit(float p_normalized_x, float p_normalized_y, ArHitResult *r_hit, ArPose *r_pose, bool *r_is_point) {
 +	if (m_init_status != INITIALISED || m_ar_session == nullptr || m_ar_frame == nullptr) {
++		return false;
++	}
++	if (m_last_camera_state != AR_TRACKING_STATE_TRACKING) {
 +		return false;
 +	}
 +	Size2i window = DisplayServer::get_singleton()->window_get_size();
@@ -60,8 +66,11 @@ index 0000000..5f9f94b
 +
 +	int32_t size = 0;
 +	ArHitResultList_getSize(m_ar_session, list, &size);
++	// Results are sorted by distance. Prefer the nearest upward-facing plane;
++	// otherwise accept the nearest feature point whose estimated surface normal
++	// points up (a textured table gives these well before a plane forms).
++	int32_t point_index = -1;
 +	bool found = false;
-+	// Results are sorted by distance; take the nearest upward-facing plane.
 +	for (int32_t i = 0; i < size && !found; ++i) {
 +		ArHitResultList_getItem(m_ar_session, list, i, r_hit);
 +		ArTrackable *trackable = nullptr;
@@ -81,8 +90,30 @@ index 0000000..5f9f94b
 +			ArTrackingState plane_state = AR_TRACKING_STATE_STOPPED;
 +			ArTrackable_getTrackingState(m_ar_session, trackable, &plane_state);
 +			found = in_polygon != 0 && plane_type == AR_PLANE_HORIZONTAL_UPWARD_FACING && plane_state == AR_TRACKING_STATE_TRACKING;
++		} else if (type == AR_TRACKABLE_POINT && point_index < 0) {
++			ArPointOrientationMode mode = AR_POINT_ORIENTATION_INITIALIZED_TO_IDENTITY;
++			ArPoint_getOrientationMode(m_ar_session, ArAsPoint(trackable), &mode);
++			if (mode == AR_POINT_ORIENTATION_ESTIMATED_SURFACE_NORMAL) {
++				ArHitResult_getHitPose(m_ar_session, r_hit, r_pose);
++				float raw[7];
++				ArPose_getPoseRaw(m_ar_session, r_pose, raw);
++				// Local +Y of the pose is the surface normal.
++				Quaternion q(raw[0], raw[1], raw[2], raw[3]);
++				Vector3 normal = Basis(q).get_column(1);
++				if (normal.y > 0.85f) {
++					point_index = i;
++				}
++			}
 +		}
 +		ArTrackable_release(trackable);
++	}
++	if (!found && point_index >= 0) {
++		ArHitResultList_getItem(m_ar_session, list, point_index, r_hit);
++		ArHitResult_getHitPose(m_ar_session, r_hit, r_pose);
++		found = true;
++		if (r_is_point != nullptr) {
++			*r_is_point = true;
++		}
 +	}
 +	ArHitResultList_destroy(list);
 +	return found;
@@ -98,10 +129,12 @@ index 0000000..5f9f94b
 +	ArHitResult_create(m_ar_session, &hit);
 +	ArPose *pose = nullptr;
 +	ArPose_create(m_ar_session, nullptr, &pose);
-+	if (find_upward_plane_hit(p_normalized_x, p_normalized_y, hit, pose)) {
++	bool is_point = false;
++	if (find_upward_plane_hit(p_normalized_x, p_normalized_y, hit, pose, &is_point)) {
 +		float matrix[16];
 +		ArPose_getMatrix(m_ar_session, pose, matrix);
 +		out["hit"] = true;
++		out["kind"] = is_point ? String("point") : String("plane");
 +		out["pose"] = ar_matrix_to_world(matrix);
 +	}
 +	ArPose_destroy(pose);
@@ -204,11 +237,146 @@ index 0000000..5f9f94b
 +	}
 +	m_anchors.clear();
 +}
++
++
++// --- Calibration diagnostics -------------------------------------------------
++
++Dictionary ARCoreInterface::get_tracking_info() {
++	Dictionary out;
++	out["camera_state"] = m_last_camera_state; // 0 tracking, 1 paused, 2 stopped, -1 none yet
++	out["failure_reason"] = m_last_failure_reason; // ArTrackingFailureReason
++	out["update_status"] = m_last_update_status; // ArStatus of the last update
++	out["frames"] = m_frames_updated;
++	out["update_errors"] = m_update_errors;
++	int32_t planes = 0;
++	int32_t upward = 0;
++	int32_t points = 0;
++	if (m_ar_session != nullptr && m_init_status == INITIALISED) {
++		ArTrackableList *list = nullptr;
++		ArTrackableList_create(m_ar_session, &list);
++		ArSession_getAllTrackables(m_ar_session, AR_TRACKABLE_PLANE, list);
++		int32_t size = 0;
++		ArTrackableList_getSize(m_ar_session, list, &size);
++		for (int32_t i = 0; i < size; ++i) {
++			ArTrackable *trackable = nullptr;
++			ArTrackableList_acquireItem(m_ar_session, list, i, &trackable);
++			ArTrackingState state = AR_TRACKING_STATE_STOPPED;
++			ArTrackable_getTrackingState(m_ar_session, trackable, &state);
++			ArPlane *subsumed = nullptr;
++			ArPlane_acquireSubsumedBy(m_ar_session, ArAsPlane(trackable), &subsumed);
++			if (state == AR_TRACKING_STATE_TRACKING && subsumed == nullptr) {
++				planes++;
++				ArPlaneType type = AR_PLANE_VERTICAL;
++				ArPlane_getType(m_ar_session, ArAsPlane(trackable), &type);
++				if (type == AR_PLANE_HORIZONTAL_UPWARD_FACING) {
++					upward++;
++				}
++			}
++			if (subsumed != nullptr) {
++				ArTrackable_release(ArAsTrackable(subsumed));
++			}
++			ArTrackable_release(trackable);
++		}
++		ArTrackableList_destroy(list);
++		if (m_ar_frame != nullptr && m_last_camera_state == AR_TRACKING_STATE_TRACKING) {
++			ArPointCloud *cloud = nullptr;
++			if (ArFrame_acquirePointCloud(m_ar_session, m_ar_frame, &cloud) == AR_SUCCESS && cloud != nullptr) {
++				ArPointCloud_getNumberOfPoints(m_ar_session, cloud, &points);
++				ArPointCloud_release(cloud);
++			}
++		}
++	}
++	out["planes"] = planes;
++	out["upward_planes"] = upward;
++	out["points"] = points;
++	return out;
++}
++
++Array ARCoreInterface::get_horizontal_planes() {
++	Array out;
++	if (m_ar_session == nullptr || m_init_status != INITIALISED) {
++		return out;
++	}
++	ArTrackableList *list = nullptr;
++	ArTrackableList_create(m_ar_session, &list);
++	ArSession_getAllTrackables(m_ar_session, AR_TRACKABLE_PLANE, list);
++	int32_t size = 0;
++	ArTrackableList_getSize(m_ar_session, list, &size);
++	for (int32_t i = 0; i < size; ++i) {
++		ArTrackable *trackable = nullptr;
++		ArTrackableList_acquireItem(m_ar_session, list, i, &trackable);
++		ArPlane *plane = ArAsPlane(trackable);
++		ArTrackingState state = AR_TRACKING_STATE_STOPPED;
++		ArTrackable_getTrackingState(m_ar_session, trackable, &state);
++		ArPlaneType type = AR_PLANE_VERTICAL;
++		ArPlane_getType(m_ar_session, plane, &type);
++		ArPlane *subsumed = nullptr;
++		ArPlane_acquireSubsumedBy(m_ar_session, plane, &subsumed);
++		if (state == AR_TRACKING_STATE_TRACKING && type == AR_PLANE_HORIZONTAL_UPWARD_FACING && subsumed == nullptr) {
++			ArPose *pose = nullptr;
++			ArPose_create(m_ar_session, nullptr, &pose);
++			ArPlane_getCenterPose(m_ar_session, plane, pose);
++			float matrix[16];
++			ArPose_getMatrix(m_ar_session, pose, matrix);
++			ArPose_destroy(pose);
++			int32_t polygon_size = 0;
++			ArPlane_getPolygonSize(m_ar_session, plane, &polygon_size);
++			std::vector<float> raw(polygon_size > 0 ? polygon_size : 0);
++			if (polygon_size > 0) {
++				ArPlane_getPolygon(m_ar_session, plane, raw.data());
++			}
++			PackedVector2Array polygon;
++			for (int32_t k = 0; k + 1 < polygon_size; k += 2) {
++				polygon.push_back(Vector2(raw[k], raw[k + 1]));
++			}
++			Dictionary entry;
++			entry["pose"] = ar_matrix_to_world(matrix);
++			entry["polygon"] = polygon; // plane-local (x, z), metres
++			out.push_back(entry);
++		}
++		if (subsumed != nullptr) {
++			ArTrackable_release(ArAsTrackable(subsumed));
++		}
++		ArTrackable_release(trackable);
++	}
++	ArTrackableList_destroy(list);
++	return out;
++}
++
++PackedVector3Array ARCoreInterface::get_point_cloud(int32_t p_max_points) {
++	PackedVector3Array out;
++	if (m_ar_session == nullptr || m_ar_frame == nullptr || m_last_camera_state != AR_TRACKING_STATE_TRACKING) {
++		return out;
++	}
++	ArPointCloud *cloud = nullptr;
++	if (ArFrame_acquirePointCloud(m_ar_session, m_ar_frame, &cloud) != AR_SUCCESS || cloud == nullptr) {
++		return out;
++	}
++	int32_t count = 0;
++	ArPointCloud_getNumberOfPoints(m_ar_session, cloud, &count);
++	const float *data = nullptr;
++	ArPointCloud_getData(m_ar_session, cloud, &data);
++	XRServer *xr_server = XRServer::get_singleton();
++	Transform3D frame = xr_server != nullptr ? xr_server->get_reference_frame() : Transform3D();
++	double scale = xr_server != nullptr ? xr_server->get_world_scale() : 1.0;
++	int32_t limit = p_max_points > 0 && p_max_points < count ? p_max_points : count;
++	int32_t step = limit > 0 ? (count + limit - 1) / limit : 1;
++	for (int32_t i = 0; data != nullptr && i < count && out.size() < limit; i += step) {
++		Vector3 p(data[i * 4], data[i * 4 + 1], data[i * 4 + 2]);
++		out.push_back(frame.xform(p * scale));
++	}
++	ArPointCloud_release(cloud);
++	return out;
++}
++
++void ARCoreInterface::set_plane_rendering(bool p_enable) {
++	m_render_planes = p_enable;
++}
 diff --git a/plugin/src/main/cpp/arcore_interface.cpp b/plugin/src/main/cpp/arcore_interface.cpp
-index ac0c96c..5ba889c 100644
+index ac0c96c..2ce2220 100644
 --- a/plugin/src/main/cpp/arcore_interface.cpp
 +++ b/plugin/src/main/cpp/arcore_interface.cpp
-@@ -30,6 +30,13 @@ void ARCoreInterface::_bind_methods() {
+@@ -30,6 +30,17 @@ void ARCoreInterface::_bind_methods() {
  	ClassDB::bind_method(D_METHOD("get_light_color_correction"), &ARCoreInterface::get_light_color_correction);
  	ClassDB::bind_method(D_METHOD("get_light_main_hdr_direction"), &ARCoreInterface::get_light_main_hdr_direction);
  	ClassDB::bind_method(D_METHOD("get_light_main_hdr_intensity"), &ARCoreInterface::get_light_main_hdr_intensity);
@@ -219,10 +387,14 @@ index ac0c96c..5ba889c 100644
 +	ClassDB::bind_method(D_METHOD("get_anchor_tracking_state", "anchor_id"), &ARCoreInterface::get_anchor_tracking_state);
 +	ClassDB::bind_method(D_METHOD("remove_anchor", "anchor_id"), &ARCoreInterface::remove_anchor);
 +	ClassDB::bind_method(D_METHOD("remove_all_anchors"), &ARCoreInterface::remove_all_anchors);
++	ClassDB::bind_method(D_METHOD("get_tracking_info"), &ARCoreInterface::get_tracking_info);
++	ClassDB::bind_method(D_METHOD("get_horizontal_planes"), &ARCoreInterface::get_horizontal_planes);
++	ClassDB::bind_method(D_METHOD("get_point_cloud", "max_points"), &ARCoreInterface::get_point_cloud);
++	ClassDB::bind_method(D_METHOD("set_plane_rendering", "enable"), &ARCoreInterface::set_plane_rendering);
  	ClassDB::bind_method(D_METHOD("getNear"), &ARCoreInterface::getNear);
  	ClassDB::bind_method(D_METHOD("getFar"), &ARCoreInterface::getFar);
  }
-@@ -377,6 +384,7 @@ void ARCoreInterface::_uninitialize() {
+@@ -377,6 +388,7 @@ void ARCoreInterface::_uninitialize() {
  		ERR_FAIL_NULL(xr_server);
  
  		if (m_ar_session != nullptr) {
@@ -230,8 +402,67 @@ index ac0c96c..5ba889c 100644
  			ArSession_destroy(m_ar_session);
  			ArFrame_destroy(m_ar_frame);
  
+@@ -639,7 +651,14 @@ void ARCoreInterface::_process() {
+ 	ArSession_setDisplayGeometry(m_ar_session, (int32_t)(Orientation::ROTATION_90), m_screen_height, m_screen_width);
+ 	ArSession_setCameraTextureName(m_ar_session, m_background_renderer.getTextureId());
+ 
+-	if (ArSession_update(m_ar_session, m_ar_frame) != AR_SUCCESS) {
++	ArStatus update_status = ArSession_update(m_ar_session, m_ar_frame);
++	m_last_update_status = (int32_t)update_status;
++	if (update_status == AR_SUCCESS) {
++		m_frames_updated++;
++	} else {
++		m_update_errors++;
++	}
++	if (update_status != AR_SUCCESS) {
+ 		ALOGW("ARCorePlugin: OnDrawFrame ARSession_update error");
+ 	}
+ 
+@@ -687,6 +706,12 @@ void ARCoreInterface::_process() {
+ 
+ 	ArTrackingState camera_m_tracking_status;
+ 	ArCamera_getTrackingState(m_ar_session, ar_camera, &camera_m_tracking_status);
++	m_last_camera_state = (int32_t)camera_m_tracking_status;
++	{
++		ArTrackingFailureReason reason = AR_TRACKING_FAILURE_REASON_NONE;
++		ArCamera_getTrackingFailureReason(m_ar_session, ar_camera, &reason);
++		m_last_failure_reason = (int32_t)reason;
++	}
+ 
+ 	m_tracking_status = ar_tracking_state_to_tracking_status(*m_ar_session, *ar_camera, camera_m_tracking_status);
+ 
+@@ -701,7 +726,7 @@ void ARCoreInterface::_process() {
+ 		estimateLight();
+ 	}
+ 
+-	if (m_enable_vertical_plane_detection || m_enable_horizontal_plane_detection) {
++	if (m_render_planes && (m_enable_vertical_plane_detection || m_enable_horizontal_plane_detection)) {
+ 		m_plane_renderer.process(*m_ar_session);
+ 	} else {
+ 		m_plane_renderer.clear();
+@@ -750,6 +775,10 @@ void ARCoreInterface::notification(int p_what) {
+ }
+ 
+ void ARCoreInterface::configureSession() {
++	if (m_ar_session == nullptr) {
++		// Settings are applied by _initialize() once the session exists.
++		return;
++	}
+ 	ArConfig *ar_config = nullptr;
+ 	ArConfig_create(m_ar_session, &ar_config);
+ 	if (is_depth_supported() && m_enable_depth_estimation) {
+@@ -779,6 +808,9 @@ void ARCoreInterface::configureSession() {
+ 	}
+ 
+ 	ERR_FAIL_NULL(ar_config);
++	// Tabletop range: fixed focus (the default) blurs a table 30-80 cm away and
++	// starves tracking of features. Auto focus is what Google recommends.
++	ArConfig_setFocusMode(m_ar_session, ar_config, AR_FOCUS_MODE_AUTO);
+ 	ERR_FAIL_COND(ArSession_configure(m_ar_session, ar_config) != AR_SUCCESS);
+ 	ArConfig_destroy(ar_config);
+ }
 diff --git a/plugin/src/main/cpp/arcore_interface.h b/plugin/src/main/cpp/arcore_interface.h
-index 04937c6..63e785f 100644
+index 04937c6..b30b33a 100644
 --- a/plugin/src/main/cpp/arcore_interface.h
 +++ b/plugin/src/main/cpp/arcore_interface.h
 @@ -11,6 +11,8 @@
@@ -243,7 +474,7 @@ index 04937c6..63e785f 100644
  
  #include "background_renderer.h"
  #include "instances_renderer.h"
-@@ -87,6 +89,17 @@ public:
+@@ -87,6 +89,22 @@ public:
  	godot::Vector3 get_light_main_hdr_direction();
  	godot::Vector3 get_light_main_hdr_intensity();
  
@@ -257,19 +488,30 @@ index 04937c6..63e785f 100644
 +	int32_t get_anchor_tracking_state(int64_t p_anchor_id);
 +	void remove_anchor(int64_t p_anchor_id);
 +	void remove_all_anchors();
++	// Calibration diagnostics and helpers (AGR).
++	godot::Dictionary get_tracking_info();
++	godot::Array get_horizontal_planes();
++	godot::PackedVector3Array get_point_cloud(int32_t p_max_points);
++	void set_plane_rendering(bool p_enable);
 +
  	float getNear() { return m_z_near; }
  	float getFar() { return m_z_far; }
  
-@@ -133,6 +146,12 @@ private:
+@@ -133,6 +151,18 @@ private:
  
  	void configureSession();
  
 +	std::map<int64_t, ArAnchor *> m_anchors;
++	int32_t m_last_camera_state = -1; // ArTrackingState, -1 before the first frame
++	int32_t m_last_failure_reason = 0; // ArTrackingFailureReason
++	int32_t m_last_update_status = 0; // ArStatus of the last ArSession_update
++	int64_t m_frames_updated = 0;
++	int64_t m_update_errors = 0;
++	bool m_render_planes = false;
 +	int64_t m_next_anchor_id = 1;
 +	godot::Transform3D ar_matrix_to_world(const float p_matrix[16]) const;
 +	ArPose *world_to_new_ar_pose(const godot::Transform3D &p_pose) const;
-+	bool find_upward_plane_hit(float p_normalized_x, float p_normalized_y, ArHitResult *r_hit, ArPose *r_pose);
++	bool find_upward_plane_hit(float p_normalized_x, float p_normalized_y, ArHitResult *r_hit, ArPose *r_pose, bool *r_is_point = nullptr);
 +
  	void handleScreenOrientationChange();
  

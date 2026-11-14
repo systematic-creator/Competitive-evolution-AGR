@@ -76,8 +76,46 @@ func start(viewport: Viewport) -> bool:
 		interface = null
 		return false
 	interface.call("enable_horizontal_plane_detection", true)
+	if interface.has_method("set_plane_rendering"):
+		# The game draws its own surface overlay during calibration.
+		interface.call("set_plane_rendering", false)
 	viewport.use_xr = true
 	return true
+
+
+## The plugin never hooks Android pause/resume itself, so the session keeps
+## running against a camera Android has taken away. Forward the app lifecycle.
+func pause() -> void:
+	if is_running() and interface.has_method("_pause"):
+		interface.call("_pause")
+
+
+func resume() -> void:
+	if is_running() and interface.has_method("_resume"):
+		interface.call("_resume")
+
+
+## Camera tracking diagnostics from the plugin (empty for unpatched builds):
+## camera_state (0 tracking, 1 paused, 2 stopped), failure_reason, frames,
+## update_errors, planes, upward_planes, points.
+func tracking_info() -> Dictionary:
+	if not is_running() or not interface.has_method("get_tracking_info"):
+		return {}
+	return interface.call("get_tracking_info") as Dictionary
+
+
+## Tracked upward-facing planes: [{pose: Transform3D, polygon: PackedVector2Array}].
+func horizontal_planes() -> Array:
+	if not is_running() or not interface.has_method("get_horizontal_planes"):
+		return []
+	return interface.call("get_horizontal_planes") as Array
+
+
+## Up to `max_points` current feature points in Godot world space.
+func point_cloud(max_points: int) -> PackedVector3Array:
+	if not is_running() or not interface.has_method("get_point_cloud"):
+		return PackedVector3Array()
+	return interface.call("get_point_cloud", max_points) as PackedVector3Array
 
 
 func stop(viewport: Viewport) -> void:
