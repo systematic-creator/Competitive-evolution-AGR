@@ -65,6 +65,13 @@ OUT="plugin/demo/addons/ARCorePlugin/bin"
 rm -rf "$PROJECT/addons/ARCorePlugin/bin"
 mkdir -p "$PROJECT/addons/ARCorePlugin/bin"
 cp -R "$OUT/." "$PROJECT/addons/ARCorePlugin/bin/"
+# Upstream's copy*SharedLibs tasks are not part of `assemble`; install the
+# native libraries that plugin.gdextension references ourselves.
+for flavor in debug release; do
+	mkdir -p "$PROJECT/addons/ARCorePlugin/bin/$flavor/arm64-v8a"
+	cp "plugin/build/intermediates/cmake/$flavor/obj/arm64-v8a/libARCorePlugin.so" \
+		"$PROJECT/addons/ARCorePlugin/bin/$flavor/arm64-v8a/"
+done
 cp "$HERE/plugin.gdextension" "$PROJECT/addons/ARCorePlugin/plugin.gdextension"
 find "$PROJECT/addons/ARCorePlugin/bin" -type f | sed "s#$PROJECT/##"
 echo "==> Done. Export with the 'Android AR' preset (Gradle build)."
