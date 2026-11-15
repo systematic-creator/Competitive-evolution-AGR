@@ -1,9 +1,9 @@
 diff --git a/plugin/src/main/cpp/arcore_anchors.cpp b/plugin/src/main/cpp/arcore_anchors.cpp
 new file mode 100644
-index 0000000..63e6c57
+index 0000000..dca2bca
 --- /dev/null
 +++ b/plugin/src/main/cpp/arcore_anchors.cpp
-@@ -0,0 +1,392 @@
+@@ -0,0 +1,423 @@
 +// Competitive Evolution AGR additions to the GodotVR ARCore plugin:
 +// horizontal-plane hit testing and ARCore anchors exposed to GDScript.
 +// Licensed under the plugin's MIT license.
@@ -56,9 +56,39 @@ index 0000000..63e6c57
 +	if (m_last_camera_state != AR_TRACKING_STATE_TRACKING) {
 +		return false;
 +	}
++	// Same "display" ARCore was given in _process (camera-texture aspect, see
++	// there), so a normalized screen point maps to the right camera pixel.
 +	Size2i window = DisplayServer::get_singleton()->window_get_size();
-+	float px = p_normalized_x * (float)window.x;
-+	float py = p_normalized_y * (float)window.y;
++	float display_w = m_display_width > 0 ? (float)m_display_width : (float)window.x;
++	float display_h = m_display_height > 0 ? (float)m_display_height : (float)window.y;
++	float px = p_normalized_x * display_w;
++	float py = p_normalized_y * display_h;
++	// Once a real surface exists, only accept hits inside its boundary
++	// polygon; loose feature points are just the early fallback.
++	bool have_upward_plane = false;
++	{
++		ArTrackableList *planes = nullptr;
++		ArTrackableList_create(m_ar_session, &planes);
++		ArSession_getAllTrackables(m_ar_session, AR_TRACKABLE_PLANE, planes);
++		int32_t count = 0;
++		ArTrackableList_getSize(m_ar_session, planes, &count);
++		for (int32_t i = 0; i < count && !have_upward_plane; ++i) {
++			ArTrackable *item = nullptr;
++			ArTrackableList_acquireItem(m_ar_session, planes, i, &item);
++			ArTrackingState state = AR_TRACKING_STATE_STOPPED;
++			ArTrackable_getTrackingState(m_ar_session, item, &state);
++			ArPlaneType type = AR_PLANE_VERTICAL;
++			ArPlane_getType(m_ar_session, ArAsPlane(item), &type);
++			ArPlane *subsumed = nullptr;
++			ArPlane_acquireSubsumedBy(m_ar_session, ArAsPlane(item), &subsumed);
++			have_upward_plane = state == AR_TRACKING_STATE_TRACKING && type == AR_PLANE_HORIZONTAL_UPWARD_FACING && subsumed == nullptr;
++			if (subsumed != nullptr) {
++				ArTrackable_release(ArAsTrackable(subsumed));
++			}
++			ArTrackable_release(item);
++		}
++		ArTrackableList_destroy(planes);
++	}
 +
 +	ArHitResultList *list = nullptr;
 +	ArHitResultList_create(m_ar_session, &list);
@@ -90,7 +120,7 @@ index 0000000..63e6c57
 +			ArTrackingState plane_state = AR_TRACKING_STATE_STOPPED;
 +			ArTrackable_getTrackingState(m_ar_session, trackable, &plane_state);
 +			found = in_polygon != 0 && plane_type == AR_PLANE_HORIZONTAL_UPWARD_FACING && plane_state == AR_TRACKING_STATE_TRACKING;
-+		} else if (type == AR_TRACKABLE_POINT && point_index < 0) {
++		} else if (type == AR_TRACKABLE_POINT && point_index < 0 && !have_upward_plane) {
 +			ArPointOrientationMode mode = AR_POINT_ORIENTATION_INITIALIZED_TO_IDENTITY;
 +			ArPoint_getOrientationMode(m_ar_session, ArAsPoint(trackable), &mode);
 +			if (mode == AR_POINT_ORIENTATION_ESTIMATED_SURFACE_NORMAL) {
@@ -258,6 +288,7 @@ index 0000000..63e6c57
 +	out["tracking_frames"] = m_tracking_frames;
 +	out["texture_id"] = (int64_t)m_background_renderer.getTextureId();
 +	out["display"] = Vector2i(m_display_width, m_display_height);
++	out["camera_texture"] = Vector2i(m_texture_width, m_texture_height);
 +	out["camera_position"] = m_last_camera_position;
 +	out["vertical_orientation"] = m_vertical_orientation;
 +	int32_t planes = 0;
@@ -397,7 +428,7 @@ index 0000000..63e6c57
 +	m_render_planes = p_enable;
 +}
 diff --git a/plugin/src/main/cpp/arcore_interface.cpp b/plugin/src/main/cpp/arcore_interface.cpp
-index ac0c96c..3aabe62 100644
+index ac0c96c..ff0ba10 100644
 --- a/plugin/src/main/cpp/arcore_interface.cpp
 +++ b/plugin/src/main/cpp/arcore_interface.cpp
 @@ -30,6 +30,17 @@ void ARCoreInterface::_bind_methods() {
@@ -446,7 +477,7 @@ index ac0c96c..3aabe62 100644
  			ArSession_destroy(m_ar_session);
  			ArFrame_destroy(m_ar_frame);
  
-@@ -636,10 +654,37 @@ void ARCoreInterface::_process() {
+@@ -636,15 +654,72 @@ void ARCoreInterface::_process() {
  		return;
  	}
  
@@ -458,11 +489,27 @@ index ac0c96c..3aabe62 100644
 +		_resume();
 +	}
 +
-+	// The app is locked to landscape (ROTATION_90). Use the live window size so
-+	// hit tests and the projection match what is on screen.
++	// The app is locked to landscape (ROTATION_90).
++	//
++	// Godot 4.4's camera-feed background (drivers/gles3/shaders/feed.glsl)
++	// draws the WHOLE camera texture stretched over the screen, with no UV
++	// transform. If we told ARCore the real screen size (e.g. 2340x1080), its
++	// projection and hit tests would assume a centre crop of the 4:3 image
++	// instead: virtual content would come out ~1.6x too large and swim against
++	// the passthrough (planes bigger than the table, the board hovering and
++	// following the phone). So give ARCore a "display" with the camera
++	// texture's own aspect ratio: its projection then covers the full image,
++	// which Godot stretches onto the screen exactly like the passthrough.
 +	Size2i window = DisplayServer::get_singleton()->window_get_size();
-+	m_display_width = window.x > 0 ? window.x : m_screen_height;
-+	m_display_height = window.y > 0 ? window.y : m_screen_width;
++	int32_t screen_w = window.x > 0 ? window.x : m_screen_height;
++	int32_t screen_h = window.y > 0 ? window.y : m_screen_width;
++	if (m_texture_width > 0 && m_texture_height > 0) {
++		m_display_height = screen_h;
++		m_display_width = (int32_t)((double)screen_h * (double)m_texture_width / (double)m_texture_height + 0.5);
++	} else {
++		m_display_width = screen_w;
++		m_display_height = screen_h;
++	}
 +	ArSession_setDisplayGeometry(m_ar_session, (int32_t)(Orientation::ROTATION_90), m_display_width, m_display_height);
  	ArSession_setCameraTextureName(m_ar_session, m_background_renderer.getTextureId());
  
@@ -486,7 +533,26 @@ index ac0c96c..3aabe62 100644
  		ALOGW("ARCorePlugin: OnDrawFrame ARSession_update error");
  	}
  
-@@ -670,6 +715,7 @@ void ARCoreInterface::_process() {
+ 	ArCamera *ar_camera;
+ 	ArFrame_acquireCamera(m_ar_session, m_ar_frame, &ar_camera);
++	{
++		ArCameraIntrinsics *intrinsics = nullptr;
++		ArCameraIntrinsics_create(m_ar_session, &intrinsics);
++		ArCamera_getTextureIntrinsics(m_ar_session, ar_camera, intrinsics);
++		int32_t tw = 0;
++		int32_t th = 0;
++		ArCameraIntrinsics_getImageDimensions(m_ar_session, intrinsics, &tw, &th);
++		ArCameraIntrinsics_destroy(intrinsics);
++		if (tw > 0 && th > 0) {
++			// The GPU texture is in sensor (landscape) orientation.
++			m_texture_width = tw > th ? tw : th;
++			m_texture_height = tw > th ? th : tw;
++		}
++	}
+ 
+ 	float view_mat[16];
+ 
+@@ -670,6 +745,7 @@ void ARCoreInterface::_process() {
  	}
  
  	m_view.invert();
@@ -494,7 +560,7 @@ index ac0c96c..3aabe62 100644
  
  	if (m_head.is_valid()) {
  		// Set our head position, note in real space, reference frame and world scale is applied later
-@@ -687,6 +733,15 @@ void ARCoreInterface::_process() {
+@@ -687,6 +763,15 @@ void ARCoreInterface::_process() {
  
  	ArTrackingState camera_m_tracking_status;
  	ArCamera_getTrackingState(m_ar_session, ar_camera, &camera_m_tracking_status);
@@ -510,7 +576,7 @@ index ac0c96c..3aabe62 100644
  
  	m_tracking_status = ar_tracking_state_to_tracking_status(*m_ar_session, *ar_camera, camera_m_tracking_status);
  
-@@ -701,7 +756,7 @@ void ARCoreInterface::_process() {
+@@ -701,7 +786,7 @@ void ARCoreInterface::_process() {
  		estimateLight();
  	}
  
@@ -519,7 +585,7 @@ index ac0c96c..3aabe62 100644
  		m_plane_renderer.process(*m_ar_session);
  	} else {
  		m_plane_renderer.clear();
-@@ -750,6 +805,10 @@ void ARCoreInterface::notification(int p_what) {
+@@ -750,6 +835,10 @@ void ARCoreInterface::notification(int p_what) {
  }
  
  void ARCoreInterface::configureSession() {
@@ -530,7 +596,7 @@ index ac0c96c..3aabe62 100644
  	ArConfig *ar_config = nullptr;
  	ArConfig_create(m_ar_session, &ar_config);
  	if (is_depth_supported() && m_enable_depth_estimation) {
-@@ -779,6 +838,13 @@ void ARCoreInterface::configureSession() {
+@@ -779,6 +868,13 @@ void ARCoreInterface::configureSession() {
  	}
  
  	ERR_FAIL_NULL(ar_config);
@@ -546,7 +612,7 @@ index ac0c96c..3aabe62 100644
 +	}
  }
 diff --git a/plugin/src/main/cpp/arcore_interface.h b/plugin/src/main/cpp/arcore_interface.h
-index 04937c6..5b494cf 100644
+index 04937c6..876a71b 100644
 --- a/plugin/src/main/cpp/arcore_interface.h
 +++ b/plugin/src/main/cpp/arcore_interface.h
 @@ -11,6 +11,8 @@
@@ -581,7 +647,7 @@ index 04937c6..5b494cf 100644
  	float getNear() { return m_z_near; }
  	float getFar() { return m_z_far; }
  
-@@ -133,6 +151,28 @@ private:
+@@ -133,6 +151,32 @@ private:
  
  	void configureSession();
  
@@ -594,6 +660,10 @@ index 04937c6..5b494cf 100644
 +	int64_t m_timestamp_changes = 0; // frames whose camera timestamp advanced
 +	int64_t m_tracking_frames = 0; // frames with the camera TRACKING
 +	int64_t m_resume_retries = 0;
++	// GPU camera texture size (landscape sensor orientation), from
++	// ArCamera_getTextureIntrinsics. 0 until the first camera frame.
++	int32_t m_texture_width = 0;
++	int32_t m_texture_height = 0;
 +	int32_t m_display_width = 0;
 +	int32_t m_display_height = 0;
 +	godot::Vector3 m_last_camera_position;

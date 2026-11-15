@@ -60,6 +60,10 @@ func _ready() -> void:
 	ar = ARSessionController.new()
 	ar.name = "ARSession"
 	ar.gameplay_hud = hud
+	# In AR the globe rests on the table (bottom at the anchor), not half
+	# sunk into it.
+	ar.board_lift_node = globe
+	ar.board_lift = OrbitGlobe.RADIUS
 	add_child(ar)
 	ar.setup(_anchor, _pivot, rig, third, rts, _environment)
 	hud._refresh()

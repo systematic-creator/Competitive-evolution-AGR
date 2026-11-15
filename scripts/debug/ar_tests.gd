@@ -548,10 +548,37 @@ func _test_ar_calibration_controller() -> void:
 		ar.flow.step == CalibrationFlow.Step.SURFACE_FOUND and ar.hud.place_button.visible and ar.reticle.visible
 	))
 	_check("ar calibration: Place board anchors on the surface", ar.place_at_reticle() and ar.is_placed())
+	var globe: Node3D = main.get("globe") as Node3D
+	_check("ar placement: the board lives in world space, not under the AR camera or origin", (
+		not ar.xr_camera.is_ancestor_of(ar.world_anchor) and not ar.xr_origin.is_ancestor_of(ar.world_anchor)
+		and not ar.xr_camera.is_ancestor_of(globe)
+	))
+	_check("ar placement: the anchor sits exactly at the hit pose", _near(ar.world_anchor.global_position, fake.surface_pose.origin, 0.001))
+	await get_tree().process_frame
+	var globe_scale: float = globe.global_transform.basis.get_scale().y
+	var globe_bottom: float = globe.global_position.y - OrbitGlobe.RADIUS * globe_scale
+	_check("ar placement: the globe rests on the surface (bottom at the hit point)", (
+		absf(globe_bottom - fake.surface_pose.origin.y) < 0.002
+	))
+	_check("ar placement: the board is table-sized (0.3-0.5 m across)", (
+		OrbitGlobe.RADIUS * 2.0 * globe_scale >= 0.3 and OrbitGlobe.RADIUS * 2.0 * globe_scale <= 0.5
+	))
+	ar.set_locked(true)
+	var locked_anchor: Transform3D = ar.world_anchor.global_transform
+	var locked_pivot: Transform3D = ar.pivot.global_transform
+	ar.xr_camera.transform = Transform3D(Basis(Vector3.UP, 0.9), Vector3(0.6, 0.2, 0.4))
+	for _i: int in 3:
+		await get_tree().process_frame
+	_check("ar placement: after lock, moving the AR camera does not move the board", (
+		_xform_near(ar.world_anchor.global_transform, locked_anchor, 0.0001)
+		and _xform_near(ar.pivot.global_transform, locked_pivot, 0.0001)
+	))
+	_check("ar placement: the AR camera stays the current camera after lock", get_viewport().get_camera_3d() == ar.xr_camera)
 	ar.fall_back("Player chose to play without AR.")
 	_check("ar calibration: Play without AR resumes the sim in the touch view", (
 		not ar.is_ar() and GameState.is_simulation_running and hud.visible
 	))
+	_check("ar placement: the globe is centred again outside AR", is_zero_approx(globe.position.y))
 	GameState.tick_interval = GameState.DEFAULT_TICK_INTERVAL
 	main.queue_free()
 	await get_tree().process_frame

@@ -199,6 +199,9 @@ static func debug_line(diag: Dictionary) -> String:
 	var display: Variant = diag.get("display", null)
 	if display is Vector2i:
 		parts.append("disp %dx%d" % [(display as Vector2i).x, (display as Vector2i).y])
+	var texture_size: Variant = diag.get("camera_texture", null)
+	if texture_size is Vector2i:
+		parts.append("camtex %dx%d" % [(texture_size as Vector2i).x, (texture_size as Vector2i).y])
 	if diag.has("arcore_version"):
 		parts.append("ARCore %s" % str(diag["arcore_version"]))
 	parts.append("debuggable %s" % yes_no.call("debuggable"))

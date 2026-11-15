@@ -104,6 +104,13 @@ point-cloud status, surfaces (upward / any state), the camera texture id, the
 camera position, the display size, the ARCore (Play Services for AR) version,
 and whether the app is debuggable.
 
+Registration note: Godot 4.4's camera-feed background stretches the whole
+camera texture over the screen, with no crop. The patched plugin therefore
+gives ARCore a "display" with the camera texture's aspect ratio
+(`camtex` / `disp` in the debug line), so the projection and hit tests match
+the stretched passthrough. Without this, virtual content came out ~1.6x too
+large and swam against the real world.
+
 Once locked, walk closer to zoom from Orbit → Region → RTS.
 
 ## Headless tests
@@ -112,7 +119,7 @@ Once locked, walk closer to zoom from Orbit → Region → RTS.
 godot --headless --path . --import
 godot --headless --path . res://scenes/debug/smoke_test.tscn   # 14 passed
 godot --headless --path . res://scenes/debug/sim_tests.tscn    # 165 passed
-godot --headless --path . res://scenes/debug/ar_tests.tscn     # 95 passed
+godot --headless --path . res://scenes/debug/ar_tests.tscn     # 102 passed
 ```
 
 Both print `PASS` / `FAIL` lines and quit non-zero on failure when headless.

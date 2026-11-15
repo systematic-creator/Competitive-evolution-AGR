@@ -64,6 +64,10 @@ var tracking_info: Dictionary = {}
 ## True while a "Place in front of me" board is held camera-relative because
 ## ARCore was not tracking yet; it becomes a world anchor once tracking holds.
 var front_follow: bool = false
+## Node lifted by `board_lift` in AR so it rests ON the surface instead of
+## being centred on it (the orbit globe: its centre is its origin).
+var board_lift_node: Node3D
+var board_lift: float = 0.0
 
 var _adjusting: bool = false
 var _start_elapsed: float = 0.0
@@ -166,6 +170,8 @@ func _enter_fallback() -> void:
 		pivot.transform = Transform3D.IDENTITY
 	if world_anchor != null:
 		world_anchor.visible = true
+	if board_lift_node != null:
+		board_lift_node.position.y = 0.0
 	_sync_simulation()
 
 
@@ -206,6 +212,8 @@ func _enter_ar() -> void:
 	_overlay = _make_overlay()
 	add_child(_overlay)
 	world_anchor.visible = false
+	if board_lift_node != null:
+		board_lift_node.position.y = board_lift
 	hud = ARHud.new()
 	add_child(hud)
 	hud.lock_toggled.connect(set_locked)
